@@ -1,0 +1,24 @@
+# local tool environments (recreated by `nix develop`)
+.nixenv/
+.venv/
+# extracted/decompiled original game and build outputs
+work/
+build/
+# converted game data (recreated by tools/build.sh)
+godot/data/
+godot/tex/
+godot/audio/
+godot/.godot/
+godot/core.*
+# signing key: back it up, never publish it
+keys/
+*.apk
+*.idsig
+__pycache__/
+# decompiled Glu / Unity code: recreated from your own APK by tools/prepare_sources.sh (never publish)
+godot/src/Game/
+godot/src/UnityEngine/
+godot/src/Engine/Stubs.g.cs
+godot/icon.png
+godot/src/Engine/Stubs.g.cs.uid
+original/

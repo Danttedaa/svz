@@ -1,0 +1,179 @@
+--- a/Assembly-CSharp/ApplicationUtilities.cs
++++ b/Assembly-CSharp/ApplicationUtilities.cs
+@@ -475,4 +475,5 @@
+ 	private IEnumerator CheckVersion()
+ 	{
++		yield break; // SvZ port: no online version check
+ 		WWW www = (IsBuildType("amazon") ? ((!Debug.isDebugBuild) ? new WWW(Singleton<Localizer>.instance.Get("amazon_version_file_location_live")) : new WWW(Singleton<Localizer>.instance.Get("amazon_version_file_location_stage"))) : ((!Debug.isDebugBuild) ? new WWW(Singleton<Localizer>.instance.Get("version_file_location_live")) : new WWW(Singleton<Localizer>.instance.Get("version_file_location_stage"))));
+ 		yield return www;
+--- a/Assembly-CSharp/FileEncryptAndDecrypt.cs
++++ b/Assembly-CSharp/FileEncryptAndDecrypt.cs
+@@ -98,4 +98,17 @@
+ 	}
+ 
++	// SvZ port: .NET (unlike Unity's Mono) may return partial reads from CryptoStream
++	private static int ReadFully(Stream s, byte[] buf)
++	{
++		int total = 0;
++		while (total < buf.Length)
++		{
++			int n = s.Read(buf, total, buf.Length - total);
++			if (n <= 0) break;
++			total += n;
++		}
++		return total;
++	}
++
+ 	public static string DecryptFile(string inFile, bool prevCorrupted)
+ 	{
+@@ -127,5 +140,5 @@
+ 			{
+ 				byte[] array3 = new byte[num4];
+-				num = cryptoStream.Read(array3, 0, array3.Length);
++				num = ReadFully(cryptoStream, array3);
+ 				stringBuilder.Append(aSCII.GetString(array3));
+ 				cryptoStream2.Write(array3, 0, num);
+@@ -137,5 +150,5 @@
+ 			byte[] hash = hashAlgorithm.Hash;
+ 			byte[] array4 = new byte[hashAlgorithm.HashSize / 8];
+-			num = cryptoStream.Read(array4, 0, array4.Length);
++			num = ReadFully(cryptoStream, array4);
+ 			if (array4.Length != num || !CheckByteArrays(array4, hash))
+ 			{
+--- a/Assembly-CSharp/MainMenuImpl.cs
++++ b/Assembly-CSharp/MainMenuImpl.cs
+@@ -104,5 +104,7 @@
+ 			});
+ 		};
+-		((SUIButton)mLayout["otherGames"]).onButtonPressed = onOtherGames;
++		// SvZ port: "Other Games" (ad cross-promotion) removed
++		mLayout.Remove("othergames", destroy: true);
++		mLayout.Remove("othergamesglow", destroy: true);
+ 		ApplicationUtilities.instance.ShowAds((ApplicationUtilities.AdPosition)17);
+ 		if (!Singleton<Profile>.instance.hasReportedUser)
+@@ -194,4 +196,5 @@
+ 	private IEnumerator CheckVersion()
+ 	{
++		yield break; // SvZ port: no online version check
+ 		if (!Singleton<Profile>.instance.newVersionDetected)
+ 		{
+@@ -516,5 +519,5 @@
+ 		((SUIButton)mLayout["startbutton"]).onButtonPressed = null;
+ 		((SUIButton)mLayout["options"]).onButtonPressed = null;
+-		((SUIButton)mLayout["otherGames"]).onButtonPressed = null;
++
+ 	}
+ 
+--- a/Assembly-CSharp/OptionsImpl.cs
++++ b/Assembly-CSharp/OptionsImpl.cs
+@@ -90,4 +90,7 @@
+ 	private void PopAboutInfo()
+ 	{
++		// SvZ port: About opens the port's page
++		Application.OpenURL("https://github.com/mesflit/svz");
++		return;
+ 		string text = string.Empty;
+ 		SDFTreeNode sDFTreeNode = SingletonMonoBehaviour<ResourcesManager>.instance.Open("Text/" + Singleton<Localizer>.instance.Get("legal_file"));
+--- a/Assembly-CSharp/PotionsDatabase.cs
++++ b/Assembly-CSharp/PotionsDatabase.cs
+@@ -128,5 +128,5 @@
+ 		default:
+ 		{
+-			int num;
++			int num = (data == "hero") ? 1 : 0;
+ 			if (num == 1)
+ 			{
+--- a/Assembly-CSharp/Profile.cs
++++ b/Assembly-CSharp/Profile.cs
+@@ -925,12 +925,5 @@
+ 		get
+ 		{
+-			string path;
+-			using (AndroidJavaClass androidJavaClass = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+-			{
+-				using AndroidJavaObject androidJavaObject = androidJavaClass.GetStatic<AndroidJavaObject>("currentActivity");
+-				using AndroidJavaObject androidJavaObject2 = androidJavaObject.Call<AndroidJavaObject>("getFilesDir", new object[0]);
+-				path = androidJavaObject2.Call<string>("getPath", new object[0]);
+-			}
+-			return Path.Combine(path, "save.data");
++			return Path.Combine(Application.persistentDataPath, "save.data");
+ 		}
+ 	}
+@@ -952,12 +945,5 @@
+ 		get
+ 		{
+-			string path;
+-			using (AndroidJavaClass androidJavaClass = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+-			{
+-				using AndroidJavaObject androidJavaObject = androidJavaClass.GetStatic<AndroidJavaObject>("currentActivity");
+-				using AndroidJavaObject androidJavaObject2 = androidJavaObject.Call<AndroidJavaObject>("getFilesDir", new object[0]);
+-				path = androidJavaObject2.Call<string>("getPath", new object[0]);
+-			}
+-			return Path.Combine(path, "prevsave.data");
++			return Path.Combine(Application.persistentDataPath, "prevsave.data");
+ 		}
+ 	}
+--- a/Assembly-CSharp/ResourcesManager.cs
++++ b/Assembly-CSharp/ResourcesManager.cs
+@@ -83,4 +83,5 @@
+ 	private IEnumerator AcquireAssetBundle()
+ 	{
++		yield break; // SvZ port: no online asset bundles
+ 		if (Application.platform != RuntimePlatform.IPhonePlayer && Application.platform != RuntimePlatform.Android)
+ 		{
+--- a/Assembly-CSharp/StoreImpl.cs
++++ b/Assembly-CSharp/StoreImpl.cs
+@@ -252,5 +252,8 @@
+ 		}
+ 		mPlayHaven = (SUIButton)mLayout["playHaven"];
+-		mPlayHaven.onButtonPressed = OnOtherGames;
++		// SvZ port: "Other Games" (ad cross-promotion) removed
++		mLayout.Remove("playhaven", destroy: true);
++		mLayout.Remove("playhavenglow", destroy: true);
++		mPlayHaven = null;
+ 		int num = 0;
+ 		while (mLayout.Exists("tab" + num))
+--- a/Assembly-CSharp/SUIScreen.cs
++++ b/Assembly-CSharp/SUIScreen.cs
+@@ -71,24 +71,6 @@
+ 		m_screenDpi = 0;
+ 		m_screenDensity = 1f;
+-		AndroidJavaClass androidJavaClass = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+-		AndroidJavaObject androidJavaObject = new AndroidJavaObject("android.util.DisplayMetrics");
+-		if (androidJavaClass != null && androidJavaObject != null)
+-		{
+-			AndroidJavaObject androidJavaObject2 = androidJavaClass.GetStatic<AndroidJavaObject>("currentActivity");
+-			if (androidJavaObject2 != null)
+-			{
+-				AndroidJavaObject androidJavaObject3 = androidJavaObject2.Call<AndroidJavaObject>("getWindowManager", new object[0]);
+-				if (androidJavaObject3 != null)
+-				{
+-					AndroidJavaObject androidJavaObject4 = androidJavaObject3.Call<AndroidJavaObject>("getDefaultDisplay", new object[0]);
+-					if (androidJavaObject4 != null)
+-					{
+-						androidJavaObject4.Call("getMetrics", androidJavaObject);
+-						m_screenDpi = androidJavaObject.Get<int>("densityDpi");
+-						m_screenDensity = androidJavaObject.Get<float>("density");
+-					}
+-				}
+-			}
+-		}
++		m_screenDpi = Godot.DisplayServer.ScreenGetDpi();
++		m_screenDensity = m_screenDpi / 160f;
+ 		Debug.Log("Screen Density Dpi: " + m_screenDpi + ", Density: " + m_screenDensity);
+ 	}
+--- a/Assembly-UnityScript/PolyTrail.cs
++++ b/Assembly-UnityScript/PolyTrail.cs
+@@ -2,5 +2,4 @@
+ using System.Collections.Generic;
+ using UnityEngine;
+-using UnityScript.Lang;
+ 
+ [Serializable]
+@@ -90,5 +89,5 @@
+ 			}
+ 			int[] array4 = new int[(sections.Count - 1) * 2 * 3];
+-			for (int i = 0; i < unchecked(Extensions.get_length((System.Array)array4) / 6); i++)
++			for (int i = 0; i < unchecked(array4.Length / 6); i++)
+ 			{
+ 				array4[i * 6 + 0] = i * 2;

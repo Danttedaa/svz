@@ -40,7 +40,7 @@ What `tools/build.sh` does:
 ## Automatic builds (GitHub Actions)
 
 `.github/workflows/build.yml` builds Android (arm64 + x86_64), Windows x86_64, Linux x86_64/arm64 and
-macOS (universal) on every push to `main`; pushing a `v*` tag also publishes a release. Repository secrets:
+macOS (universal) on every push to `main` and publishes them as the `latest` release; pushing a `v*` tag makes a versioned release. Repository secrets:
 
 - `SVZ_APK_URL`: link to your original APK (direct link, or a Google Drive "anyone with the link" share link)
 - `SVZ_KEYSTORE_B64` (optional): `base64 -w0 keys/svz.jks`, keeps Android updates installable over your current install

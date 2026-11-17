@@ -7,15 +7,16 @@
 #   --obb PATH     its expansion file (main.*.obb) if the game data is not merged into the APK
 #   --reexport     re-extract, re-decompile and re-convert everything from the APK
 #   --debug        debug export (default: release, signed with keys/svz.jks)
-#   --install      install on the phone with adb afterwards
+#   --platform P   android (default) | windows | linux | linux-arm64 | macos | all (comma separated works too)
+#   --install      install on the phone with adb afterwards (android)
 #
-# Output: build/svz.apk
+# Output: build/svz.apk, build/svz-windows.zip, build/svz-linux-x86_64.zip, build/svz-linux-arm64.zip, build/svz-macos.zip
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 apk="$root/original/svz.apk"; obb=""
-reexport=0; mode=release; install=0
+reexport=0; mode=release; install=0; platforms=android
 while [ $# -gt 0 ]; do
   case "$1" in
     --apk) apk="$2"; shift;;
@@ -23,7 +24,8 @@ while [ $# -gt 0 ]; do
     --reexport) reexport=1;;
     --debug) mode=debug;;
     --install) install=1;;
-    -h|--help) sed -n 2,13p "$0"; exit 0;;
+    --platform) platforms="$2"; shift;;
+    -h|--help) sed -n 2,16p "$0"; exit 0;;
     *) echo "unknown option $1" >&2; exit 1;;
   esac; shift
 done
@@ -70,13 +72,27 @@ step "4/5 importing assets and compiling C#"
 (cd godot && godot --headless --import >/dev/null 2>&1 || true)
 (cd godot && dotnet build -v q -nologo | grep -E " error " || true)
 
-step "5/5 exporting Android APK ($mode)"
+[ "$platforms" = all ] && platforms=android,windows,linux,linux-arm64,macos
 mkdir -p build
-(cd godot && godot --headless --export-$mode Android ../build/svz.apk 2>&1 | grep -E "ERROR|DONE" | grep -v EditorSettings || true)
-[ -f build/svz.apk ] || { echo "export failed" >&2; exit 1; }
-ls -lh build/svz.apk
+for p in ${platforms//,/ }; do
+  case "$p" in
+    android) preset=Android; out=build/svz.apk;;
+    windows) preset=Windows; out=build/svz-windows.zip;;
+    linux) preset=Linux; out=build/svz-linux-x86_64.zip;;
+    linux-arm64) preset="Linux arm64"; out=build/svz-linux-arm64.zip;;
+    macos) preset=macOS; out=build/svz-macos.zip;;
+    *) echo "unknown platform $p" >&2; exit 1;;
+  esac
+  step "5/5 exporting $preset ($mode) -> $out"
+  rm -f "$out"
+  log="build/export-$p.log"
+  (cd godot && godot --headless --export-$mode "$preset" "../$out" > "../$log" 2>&1 || true)
+  grep -E "ERROR|DONE" "$log" | grep -v EditorSettings || true
+  [ -f "$out" ] || { echo "export failed: $preset (full log follows)" >&2; tail -60 "$log" >&2; exit 1; }
+  ls -lh "$out"
+done
 
-if [ $install = 1 ]; then
+if [ $install = 1 ] && [ -f build/svz.apk ]; then
   step "installing on the phone (confirm the install prompt on the phone)"
   adb install --no-incremental -r build/svz.apk
 fi

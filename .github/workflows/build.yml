@@ -1,0 +1,102 @@
+# Builds SvZ for Android, Windows, Linux and macOS.
+#
+# Needs repository secrets (Settings > Secrets and variables > Actions):
+#   SVZ_APK_URL       link to your original Samurai vs Zombies Defense 3.4.0 APK (a direct link, or a
+#                     Google Drive share link of a file shared with "anyone with the link")
+#   SVZ_KEYSTORE_B64  base64 of keys/svz.jks (optional; without it a new key is made and phones
+#                     cannot update an install that was signed with your key)
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Fetch the original APK
+        env:
+          SVZ_APK_URL: ${{ secrets.SVZ_APK_URL }}
+        run: |
+          if [ -z "$SVZ_APK_URL" ]; then
+            echo "::error::Set the SVZ_APK_URL secret to a direct download link of the original APK"
+            exit 1
+          fi
+          url="$SVZ_APK_URL"
+          # Google Drive share links -> direct download (confirm=t skips the large-file warning page)
+          id=$(printf '%s' "$url" | sed -nE 's#.*drive\.google\.com/(file/d/|open\?id=|uc\?(export=download&)?id=)([A-Za-z0-9_-]+).*#\3#p')
+          if [ -n "$id" ]; then url="https://drive.usercontent.google.com/download?id=$id&export=download&confirm=t"; fi
+          mkdir -p original
+          curl -fsSL --retry 3 -o original/svz.apk "$url"
+          unzip -tq original/svz.apk > /dev/null || { echo "::error::SVZ_APK_URL did not return a valid APK (is it a direct download link?)"; exit 1; }
+          ls -lh original/svz.apk
+
+      - name: Signing key
+        env:
+          SVZ_KEYSTORE_B64: ${{ secrets.SVZ_KEYSTORE_B64 }}
+        run: |
+          mkdir -p keys
+          if [ -n "$SVZ_KEYSTORE_B64" ]; then echo "$SVZ_KEYSTORE_B64" | base64 -d > keys/svz.jks; fi
+
+      - name: Build all platforms
+        run: nix develop -c tools/build.sh --platform all
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svz-android-arm64
+          path: build/svz.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svz-windows-x86_64
+          path: build/svz-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svz-linux-x86_64
+          path: build/svz-linux-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svz-linux-arm64
+          path: build/svz-linux-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svz-macos
+          path: build/svz-macos.zip
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: export-logs
+          path: build/*.log
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/svz.apk
+            build/svz-windows.zip
+            build/svz-linux-x86_64.zip
+            build/svz-linux-arm64.zip
+            build/svz-macos.zip

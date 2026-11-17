@@ -59,6 +59,10 @@ Generated / local only (git-ignored): `godot/src/Game`, `godot/src/UnityEngine`,
 
 Menus, story, shop and gameplay work. Missing: legacy particle effects, `OnGUI` screens, Pachinko is untested.
 
+## License
+
+The code in this repository is MIT licensed (see `LICENSE`).
+
 ## Legal
 
 Samurai vs Zombies Defense is © Glu Mobile; Unity is © Unity Technologies. This repository only contains

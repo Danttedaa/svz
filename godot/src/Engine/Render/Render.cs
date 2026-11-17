@@ -581,6 +581,7 @@ namespace Svz
 		{
 			var go = r.__go;
 			bool vis = r.__enabled && go != null && go.__active && !go.__isAsset && !r.__destroyed;
+			if (vis && r is ParticleRenderer && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") vis = false;
 			if (vis && r is ParticleRenderer pr) Particles.BuildMesh(pr, CameraFor(go.__layer));
 			Mesh mesh = vis ? r.__Mesh : null;
 			if (mesh == null || mesh.vertexCount == 0) vis = false;

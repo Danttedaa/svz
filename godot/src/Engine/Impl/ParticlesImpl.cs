@@ -272,13 +272,21 @@ namespace Svz
 				Vector3 pos = e.__world ? p.position : t.TransformPoint(p.position);
 				Vector3 vel = e.__world ? p.velocity : t.TransformDirection(p.velocity);
 				float h = p.size * 0.5f;
+				// Unity clamps a particle's on-screen size to maxParticleSize * viewport height
+				if (cam != null && r.__maxSize > 0f)
+				{
+					float viewH = cam.__orthographic ? cam.__ortho * 2f
+						: 2f * Mathf.Max(0.01f, Vector3.Dot(pos - cam.transform.position, camFwd)) * Mathf.Tan(cam.__fov * 0.5f * Mathf.Deg2Rad);
+					float maxWorld = r.__maxSize * viewH;
+					if (p.size > maxWorld) h = maxWorld * 0.5f;
+				}
 				Vector3 right, up;
 				switch (r.__mode)
 				{
 					case ParticleRenderMode.Stretch:
 					{
 						Vector3 dir = vel.sqrMagnitude > 1e-8f ? vel.normalized : camUp;
-						float len = p.size * r.__lengthScale + vel.magnitude * r.__velScale;
+						float len = h * 2f * r.__lengthScale + vel.magnitude * r.__velScale;
 						Vector3 side = Vector3.Cross(dir, camFwd);
 						side = side.sqrMagnitude > 1e-8f ? side.normalized : camRight;
 						right = side * h;

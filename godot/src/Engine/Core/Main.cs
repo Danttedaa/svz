@@ -35,8 +35,10 @@ namespace Svz
 				if (a.StartsWith("--level=")) StartLevel = int.Parse(a.Substring(8));
 				// --shots=2,5,9 : save user://shot_<sec>.png at those seconds, quit after the last one
 				if (a.StartsWith("--shots=")) mShots = new Queue<double>(a.Substring(8).Split(',').Select(double.Parse));
-				if (a.StartsWith("--dump=")) mDumpAt = double.Parse(a.Substring(7));
-				if (a.StartsWith("--tap=")) mTaps = new Queue<(double, float, float)>(a.Substring(6).Split(';').Select(t => { var p = t.Split(':'); return (double.Parse(p[0]), float.Parse(p[1]), float.Parse(p[2])); }));
+				if (a.StartsWith("--dump=")) mDumps = new Queue<double>(a.Substring(7).Split(',').Select(double.Parse));
+				if (a.StartsWith("--killall=")) mKillAt = double.Parse(a.Substring(10));
+				// --tap=sec:x:y[:holdSec];...
+				if (a.StartsWith("--tap=")) mTaps = new Queue<(double, float, float, double)>(a.Substring(6).Split(';').Select(t => { var p = t.Split(':'); return (double.Parse(p[0]), float.Parse(p[1]), float.Parse(p[2]), p.Length > 3 ? double.Parse(p[3]) : 0.1); }));
 			}
 			World3D = new Node3D { Name = "World" };
 			AddChild(World3D);
@@ -51,9 +53,34 @@ namespace Svz
 		}
 
 		private Queue<double> mShots;
-		private Queue<(double t, float x, float y)> mTaps;
+		private Queue<(double t, float x, float y, double hold)> mTaps;
 		private double mClock;
-		private double mDumpAt = -1;
+		private double mKillAt = -1;
+		private Queue<double> mDumps;
+
+		/// debug: kill every enemy (exercises death animations / melting)
+		private static void KillAll()
+		{
+			var mgr = WeakGlobalInstance<CharactersManager>.instance;
+			if (mgr == null) return;
+			int n = 0;
+			foreach (var c in mgr.allEnemies.ToArray()) { c.health = 0; n++; }
+			GD.Print($"[svz] killed {n} enemies");
+		}
+
+		private static void CountCorpses()
+		{
+			int dying = 0, alive = 0;
+			foreach (var mb in Runtime.Behaviours)
+				if (mb is CharacterModelController cmc && !mb.__destroyed && mb.gameObject.active)
+				{
+					var f = typeof(CharacterModelController).GetField("startedDieAnim", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+					var p = typeof(CharacterModelController).GetProperty("startedDieAnim");
+					bool d = (bool)(p?.GetValue(cmc) ?? f?.GetValue(cmc) ?? false);
+					if (d) dying++; else alive++;
+				}
+			GD.Print($"[corpses] t={Time.time:0} dying={dying} alive={alive}");
+		}
 
 		private static void Dump()
 		{
@@ -65,8 +92,9 @@ namespace Svz
 				if (!r.__visible) continue;
 				if (n++ > 400) break;
 				var b = r.bounds;
-				if (!r.gameObject.name.StartsWith("terrain") && !r.gameObject.name.StartsWith("ground")) continue;
-				GD.Print($"[dump]   mats={string.Join(";", r.__mats.Select(m => m == null ? "null" : m.name + "/" + m.shader?.__shaderName + "/tex=" + (m.GetTexture("_MainTex")?.name)))} lm={r.__lightmapIndex} st={r.__lightmapST} subsets={(r.__subsets == null ? "-" : string.Join(",", r.__subsets))} lmcount={Svz.SceneLightmaps.Maps.Count}");
+				if (r is ParticleRenderer || r.__mats.Any(m => m?.shader?.__shaderName?.Contains("Billboard") == true || m?.shader?.__shaderName == "AlphaBlend"))
+					GD.Print($"[dump]   {r.GetType().Name} {r.gameObject.name} mats={string.Join(";", r.__mats.Select(m => m == null ? "null" : m.name + "/" + m.shader?.__shaderName + "/tex=" + (m.GetTexture("_MainTex")?.name)))} emitter={(r.GetComponent<ParticleEmitter>() is ParticleEmitter pe ? $"n={pe.particleCount} size={pe.minSize}-{pe.maxSize} world={pe.useWorldSpace}" : "-")} maxSize={(r as ParticleRenderer)?.maxParticleSize}");
+				continue;
 				GD.Print($"[dump] r {r.gameObject.name} layer={r.gameObject.layer} pos={r.transform.position} scale={r.transform.lossyScale} bounds={b.center}/{b.size} mesh={(r.__Mesh?.name)} parent={(r.transform.parent?.name)}");
 			}
 		}
@@ -83,13 +111,21 @@ namespace Svz
 			mClock += delta;
 			if (mTaps != null && mTaps.Count > 0 && mClock >= mTaps.Peek().t)
 			{
-				var (_, x, y) = mTaps.Dequeue();
+				var (_, x, y, hold) = mTaps.Dequeue();
 				var pos = new Godot.Vector2(x * Display.Width, y * Display.Height);
+				if (Movie.Playing) Movie.Stop();
 				InputState.Feed(new InputEventScreenTouch { Index = 0, Pressed = true, Position = pos });
-				GetTree().CreateTimer(0.1).Timeout += () => InputState.Feed(new InputEventScreenTouch { Index = 0, Pressed = false, Position = pos });
+				GetTree().CreateTimer(hold).Timeout += () => InputState.Feed(new InputEventScreenTouch { Index = 0, Pressed = false, Position = pos });
 				GD.Print($"[svz] tap {x},{y}");
 			}
-			if (mDumpAt >= 0 && mClock >= mDumpAt) { mDumpAt = -1; Dump(); }
+			if (mDumps != null && mDumps.Count > 0 && mClock >= mDumps.Peek()) { GD.Print($"[dump] ---- t={mDumps.Dequeue()}"); Dump(); }
+			if (mKillAt >= 0 && mClock >= mKillAt) { mKillAt = -1; KillAll(); }
+			if (OS.GetCmdlineUserArgs().Contains("--corpses") && Time.frameCount % 120 == 0) CountCorpses();
+			if (mKillAt == -1 && Camera.main != null && OS.GetCmdlineUserArgs().Contains("--trace-cam") && Time.frameCount % 10 == 0)
+			{
+				var ct = Camera.main.transform;
+				GD.Print($"[cam] t={mClock:0.00} pos={ct.position.x:0.000},{ct.position.y:0.000},{ct.position.z:0.000} euler={ct.eulerAngles.x:0.0000},{ct.eulerAngles.y:0.0000},{ct.eulerAngles.z:0.0000} parent={ct.parent?.name}");
+			}
 			if (mShots != null && mShots.Count > 0 && mClock >= mShots.Peek())
 			{
 				double t = mShots.Dequeue();

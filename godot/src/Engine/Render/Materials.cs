@@ -79,6 +79,8 @@ namespace Svz
 			if ((f & F.Lit) == 0 || lightmap) modes.Add("unshaded");
 			modes.Add((f & F.CullOff) != 0 || System.Environment.GetEnvironmentVariable("SVZ_NOCULL") == "1" ? "cull_disabled" : "cull_back");
 			if ((f & F.NoZWrite) != 0) modes.Add("depth_draw_never");
+			// Unity's particle/additive shaders turn fog off (Fog { Color (0,0,0,0) }); Godot would paint fog over the whole quad
+			if ((f & (F.Add | F.Premul)) != 0 || (f & F.VColor) != 0 && (f & F.CullOff) != 0) modes.Add("fog_disabled");
 			modes.Add("specular_disabled");
 			sb.Append(string.Join(", ", modes)).Append(";\n");
 			sb.Append(@"

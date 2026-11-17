@@ -486,7 +486,8 @@ namespace Svz
 				float len = s.__Length;
 				float prev = s.__time;
 				s.__time += dt * s.__speed;
-				if (s.__clip != null && s.__clip.__events.Count > 0) CollectEvents(s, s.__prevTime, s.__time, len, fired);
+				// legacy Animation does not fire events of states with zero weight
+				if (s.__clip != null && s.__clip.__events.Count > 0 && s.__weight > 0f) CollectEvents(s, s.__prevTime, s.__time, len, fired);
 				s.__prevTime = s.__time;
 				var wrap = s.__EffectiveWrap;
 				if (len > 0f && (wrap == WrapMode.Once || wrap == WrapMode.Default) && (s.__speed >= 0 ? s.__time >= len : s.__time <= 0f))
@@ -514,7 +515,7 @@ namespace Svz
 			foreach (var ev in s.__clip.__events)
 			{
 				float et = ev.__time - start;
-				if (et < 0 || et > len + 1e-4f) continue;
+				if (et < 0 || loops && et > len + 1e-4f) continue;   // Unity still fires events past the last key of a clamped clip
 				if (!loops)
 				{
 					if (et > from && et <= to) outList.Add((s, ev));
@@ -535,7 +536,7 @@ namespace Svz
 			bool any = false;
 			foreach (var c in a.__go.__components.ToArray())
 			{
-				if (!(c is MonoBehaviour mb) || mb.__destroyed) continue;
+				if (!(c is MonoBehaviour mb) || mb.__destroyed || !mb.__awoken) continue;
 				var m = Messaging.FindMethod(mb.GetType(), ev.__function, -1);
 				if (m == null) continue;
 				any = true;

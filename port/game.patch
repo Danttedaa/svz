@@ -64,6 +64,48 @@
 +
  	}
  
+--- a/Assembly-CSharp/OnlineItemsManager.cs
++++ b/Assembly-CSharp/OnlineItemsManager.cs
+@@ -35,18 +35,18 @@
+ 	private Item[] mItems = new Item[14]
+ 	{
+-		new Item("com.glu.samuzombie.2000_coins", string.Empty, ItemType.Coins, 2000, "$0.00"),
+-		new Item("com.glu.samuzombie.5500_coins", string.Empty, ItemType.Coins, 5500, "$0.00"),
+-		new Item("com.glu.samuzombie.13000_coins", string.Empty, ItemType.Coins, 13000, "$0.00"),
+-		new Item("com.glu.samuzombie.32000_coins", string.Empty, ItemType.Coins, 32000, "$0.00"),
+-		new Item("com.glu.samuzombie.100000_coins", string.Empty, ItemType.Coins, 100000, "$0.00"),
+-		new Item("com.glu.samuzombie.260000_coins", string.Empty, ItemType.Coins, 260000, "$0.00"),
+-		new Item("com.glu.samuzombie.gold.monthly", string.Empty, ItemType.Vip_Gold, 0, "$0.00"),
+-		new Item("com.glu.samuzombie.silver.monthly", string.Empty, ItemType.Vip_Silver, 0, "$0.00"),
+-		new Item("com.glu.samuzombie.40_gems", string.Empty, ItemType.Gems, 40, "$0.00"),
+-		new Item("com.glu.samuzombie.110_gems", string.Empty, ItemType.Gems, 110, "$0.00"),
+-		new Item("com.glu.samuzombie.260_gems", string.Empty, ItemType.Gems, 260, "$0.00"),
+-		new Item("com.glu.samuzombie.640_gems", string.Empty, ItemType.Gems, 640, "$0.00"),
+-		new Item("com.glu.samuzombie.2000_gems", string.Empty, ItemType.Gems, 2000, "$0.00"),
+-		new Item("com.glu.samuzombie.5200_gems", string.Empty, ItemType.Gems, 5200, "$0.00")
++		new Item("com.glu.samuzombie.2000_coins", string.Empty, ItemType.Coins, 2000, "FREE"),
++		new Item("com.glu.samuzombie.5500_coins", string.Empty, ItemType.Coins, 5500, "FREE"),
++		new Item("com.glu.samuzombie.13000_coins", string.Empty, ItemType.Coins, 13000, "FREE"),
++		new Item("com.glu.samuzombie.32000_coins", string.Empty, ItemType.Coins, 32000, "FREE"),
++		new Item("com.glu.samuzombie.100000_coins", string.Empty, ItemType.Coins, 100000, "FREE"),
++		new Item("com.glu.samuzombie.260000_coins", string.Empty, ItemType.Coins, 260000, "FREE"),
++		new Item("com.glu.samuzombie.gold.monthly", string.Empty, ItemType.Vip_Gold, 0, "FREE"),
++		new Item("com.glu.samuzombie.silver.monthly", string.Empty, ItemType.Vip_Silver, 0, "FREE"),
++		new Item("com.glu.samuzombie.40_gems", string.Empty, ItemType.Gems, 40, "FREE"),
++		new Item("com.glu.samuzombie.110_gems", string.Empty, ItemType.Gems, 110, "FREE"),
++		new Item("com.glu.samuzombie.260_gems", string.Empty, ItemType.Gems, 260, "FREE"),
++		new Item("com.glu.samuzombie.640_gems", string.Empty, ItemType.Gems, 640, "FREE"),
++		new Item("com.glu.samuzombie.2000_gems", string.Empty, ItemType.Gems, 2000, "FREE"),
++		new Item("com.glu.samuzombie.5200_gems", string.Empty, ItemType.Gems, 5200, "FREE")
+ 	};
+ 
+@@ -140,5 +140,5 @@
+ 			if (item.id == d.id)
+ 			{
+-				item.price = d.price;
++				item.price = "FREE";   // SvZ port: purchases are free
+ 				return;
+ 			}
 --- a/Assembly-CSharp/OptionsImpl.cs
 +++ b/Assembly-CSharp/OptionsImpl.cs
 @@ -90,4 +90,7 @@
@@ -113,6 +155,23 @@
 +			return Path.Combine(Application.persistentDataPath, "prevsave.data");
  		}
  	}
+--- a/Assembly-CSharp/PurchaseCurrencyDialog.cs
++++ b/Assembly-CSharp/PurchaseCurrencyDialog.cs
+@@ -297,5 +297,5 @@
+ 			mListController.HideAllCells();
+ 		}
+-		((SUIButton)mLayout["free"]).visible = v;
++		((SUIButton)mLayout["free"]).visible = false;   // SvZ port: Tapjoy offer wall removed
+ 		((SUISprite)mLayout["waitIcon"]).visible = !v;
+ 		((SUILabel)mLayout["errorMessage"]).visible = !v;
+@@ -417,5 +417,6 @@
+ 		mSomethingPurchased = true;
+ 		Singleton<PlayHavenTowerControl>.instance.inIAPMode = true;
+-		if (MultiLanguages.isCheatIAP)
++		// SvZ port: the game's store is gone, every currency pack is free
++		if (true)
+ 		{
+ 			Singleton<OnlineItemsManager>.instance.CompletePurchase(id);
 --- a/Assembly-CSharp/ResourcesManager.cs
 +++ b/Assembly-CSharp/ResourcesManager.cs
 @@ -83,4 +83,5 @@

@@ -6,7 +6,8 @@ not install on new arm64-only phones. This project runs the game's own code and 
 
 - the Unity 3.4 engine API is re-implemented on Godot (`godot/src/Engine`)
 - the game's scripts run unchanged, decompiled from **your own copy** of the game
-- ads, tracking, analytics, the Glu wallet and in-app purchases are removed; the app has no internet permission
+- ads, tracking, analytics and the Glu wallet are removed; the app has no internet permission
+- the store can no longer sell anything, so every coin/gem pack in the shop is free
 
 **This repository contains no game code and no game assets.** You need the original
 Samurai vs Zombies Defense 3.4.0 APK (and its OBB if the data is not merged into the APK).

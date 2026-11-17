@@ -80,7 +80,7 @@
 
           # Asset tools (UnityPy is not in nixpkgs): pinned venv, Python from Nix.
           if [ ! -x $root/.venv/bin/python ] || [ $root/tools/requirements.txt -nt $root/.venv/.stamp ]; then
-            uv venv -q $root/.venv && uv pip install -q --python $root/.venv/bin/python -r $root/tools/requirements.txt \
+            uv venv -q --allow-existing $root/.venv && uv pip install -q --python $root/.venv/bin/python -r $root/tools/requirements.txt \
               && touch $root/.venv/.stamp
           fi
         '';

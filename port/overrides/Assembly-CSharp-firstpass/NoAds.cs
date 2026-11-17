@@ -60,7 +60,8 @@ public static class ANotificationManager
 
 public static class AInAppPurchase
 {
-	public static bool BillingSupported { get; set; }
+	// the store screen only lists packs when billing is available; packs are granted for free (PurchaseCurrencyDialog)
+	public static bool BillingSupported { get; set; } = true;
 	public static bool SubscriptionSupported { get; set; }
 	public static string UserID { get; set; } = string.Empty;
 	public static bool RequestedIAP { get; set; }

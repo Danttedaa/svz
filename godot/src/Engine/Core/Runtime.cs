@@ -639,6 +639,7 @@ namespace Svz
 					sByName.TryAdd(t.FullName, t);
 				}
 			}
+			if (name == "EllipsoidParticleEmitter" || name == "MeshParticleEmitter") return typeof(ParticleEmitter);
 			sByName.TryGetValue(name, out var r);
 			return r;
 		}

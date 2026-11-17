@@ -58,7 +58,7 @@ Generated / local only (git-ignored): `godot/src/Game`, `godot/src/UnityEngine`,
 
 ## Status
 
-Menus, story, shop and gameplay work. Missing: legacy particle effects, `OnGUI` screens, Pachinko is untested.
+Menus, story movie, shop, gameplay and legacy particle effects work. Missing: `OnGUI` screens; Pachinko is untested.
 
 ## License
 

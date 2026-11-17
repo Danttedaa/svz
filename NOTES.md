@@ -50,5 +50,6 @@ Unity 3.4 quirks learned:
 - .NET CryptoStream returns partial reads (save file decrypt fixed with ReadFully)
 - force InvariantCulture (Turkish locale breaks float parsing)
 
-TODO: legacy particles (Particles.Update is a stub), OnGUI/ImGui (stub), hide "Other Games" buttons,
+Done: legacy particles (Impl/ParticlesImpl.cs), story movie (Core/Movie.cs, mp4 -> Theora .ogv via ffmpeg in build.sh).
+TODO: OnGUI/ImGui (stub),
 Pachinko physics verification, APK size (301 MB), release signing.

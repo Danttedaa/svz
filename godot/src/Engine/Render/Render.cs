@@ -568,10 +568,20 @@ namespace Svz
 			}
 		}
 
+		/// the camera that renders a layer (for billboards)
+		private static Camera CameraFor(int layer)
+		{
+			Camera best = null;
+			foreach (var c in Cameras)
+				if (c.__enabled && c.gameObject != null && c.gameObject.__active && (c.__cull & (1 << layer)) != 0 && (best == null || c.__depth > best.__depth)) best = c;
+			return best ?? Camera.main;
+		}
+
 		private static void SyncRenderer(Renderer r)
 		{
 			var go = r.__go;
 			bool vis = r.__enabled && go != null && go.__active && !go.__isAsset && !r.__destroyed;
+			if (vis && r is ParticleRenderer pr) Particles.BuildMesh(pr, CameraFor(go.__layer));
 			Mesh mesh = vis ? r.__Mesh : null;
 			if (mesh == null || mesh.vertexCount == 0) vis = false;
 			r.__visible = vis;
@@ -598,6 +608,7 @@ namespace Svz
 				Skinning.Sync(smr, node, mesh);
 				node.GlobalTransform = G.Transform3D.Identity;
 			}
+			else if (r is ParticleRenderer) node.GlobalTransform = G.Transform3D.Identity;   // particle mesh is in world space
 			else if (batched) node.GlobalTransform = r.__batchRoot != null ? M(r.__batchRoot.localToWorldMatrix) : G.Transform3D.Identity;
 			else node.GlobalTransform = M(r.transform.localToWorldMatrix);
 

@@ -71,7 +71,11 @@ namespace Svz
 			}
 		}
 
-		public override void _Input(InputEvent e) => InputState.Feed(e);
+		public override void _Input(InputEvent e)
+		{
+			if (Movie.Playing) { Movie.OnInput(e); return; }
+			InputState.Feed(e);
+		}
 
 		/// scripted screenshots / taps for automated testing on the PC
 		private void DebugAutomation(double delta)
@@ -111,6 +115,7 @@ namespace Svz
 
 		public override void _Process(double delta)
 		{
+			if (Movie.Playing) { Movie.Update(); DebugAutomation(delta); return; }
 			float dt = Mathf.Min((float)delta, Time.__maxDt) * Time.__scale;
 			Time.__dt = dt;
 			Time.__unscaled += (float)delta;

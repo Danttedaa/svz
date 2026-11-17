@@ -8,6 +8,7 @@ build/
 godot/data/
 godot/tex/
 godot/audio/
+godot/video/
 godot/.godot/
 godot/core.*
 # signing key: back it up, never publish it
@@ -22,3 +23,4 @@ godot/src/Engine/Stubs.g.cs
 godot/icon.png
 godot/src/Engine/Stubs.g.cs.uid
 original/
+godot/video/

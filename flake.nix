@@ -37,7 +37,7 @@
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           godot dotnet jdk android.androidsdk android.platform-tools
-          python pkgs.uv pkgs.jadx pkgs.apktool  # ilspycmd: nix shell nixpkgs#ilspycmd (it pulls dotnet 8)
+          python pkgs.uv pkgs.jadx pkgs.apktool pkgs.ffmpeg-headless  # ilspycmd: nix shell nixpkgs#ilspycmd (it pulls dotnet 8)
         ];
 
         DOTNET_ROOT = "${dotnet.unwrapped}/share/dotnet";

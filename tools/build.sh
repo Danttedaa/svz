@@ -38,6 +38,7 @@ if [ ! -d "$data" ] || [ $reexport = 1 ]; then
   # game data lives in the APK (merged builds) or in the OBB expansion zip
   unzip -q "${obb:-$apk}" 'assets/bin/*' -d "$root/work/apk"
   unzip -p "$apk" res/drawable-xhdpi-v4/app_icon.png > godot/icon.png   # the game's own icon
+  unzip -q -o "$apk" 'assets/*.mp4' -d "$root/work/apk" 2>/dev/null || true
 else
   step "1/5 Unity data already extracted (work/apk)"
 fi
@@ -51,6 +52,13 @@ if [ ! -f godot/data/files.json ] || [ $reexport = 1 ]; then
   step "2/5 converting game data (UnityPy) -> godot/data, godot/tex, godot/audio"
   rm -rf godot/data godot/tex godot/audio
   .venv/bin/python -I tools/export_assets.py "$data" godot
+  # full-screen movies: Godot plays Theora, the game shipped mp4
+  rm -rf godot/video; mkdir -p godot/video
+  for m in "$root"/work/apk/assets/*.mp4; do
+    [ -f "$m" ] || continue
+    case "$(basename "$m")" in Glu_logo_*) continue;; esac   # never played by the Android build
+    ffmpeg -loglevel error -y -i "$m" -c:v libtheora -q:v 6 -c:a libvorbis -q:a 4 "godot/video/$(basename "${m%.mp4}").ogv"
+  done
 else
   step "2/5 game data already converted (godot/data)"
 fi

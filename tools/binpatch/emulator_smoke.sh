@@ -14,6 +14,7 @@
 # exported launcher activity, so these stages install emulator-only VARIANTS of the APK whose packaged
 # command line (assets/_cl_) has the arguments appended, signed with a throwaway key (smoke_variant.py).
 # The published APK is not changed. If a variant cannot be built, the stage is WARN (not exercised).
+# Distinguish launcher failures from game crashes; never relaunch after a failed start.
 set -uo pipefail
 apk="$1"; pkg="$2"; out="$3"; wait_s="${4:-60}"
 mkdir -p "$out"
@@ -49,6 +50,19 @@ make_variant() {   # stage args... -> prints the signed variant path
   echo "$signed"
 }
 
+start_app() {  # stage; retain the launcher result instead of swallowing a missing activity
+  local stage="$1"
+  local result="$out/launch-$stage.txt"
+  if ! adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > "$result" 2>&1; then
+    fail+=("$stage: launcher command failed: $(tail -2 "$result" | tr '\n' ' ' | cut -c1-200)")
+    return 1
+  fi
+  if grep -Eq 'No activities found|monkey aborted|Events injected: 0' "$result"; then
+    fail+=("$stage: launcher did not inject an event: $(tail -3 "$result" | tr '\n' ' ' | cut -c1-200)")
+    return 1
+  fi
+}
+
 launch_level() {   # stage level seconds args...
   local stage="$1" level="$2" secs="$3"; shift 3
   local log="$out/logcat-$stage.txt" variant
@@ -61,7 +75,7 @@ launch_level() {   # stage level seconds args...
   fi
   rm -f "$variant"
   adb logcat -c
-  adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+  if ! start_app "$stage"; then return 1; fi
   sleep "$secs"
   local pid; pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot-$stage.png" 2>/dev/null || rm -f "$out/screenshot-$stage.png"
@@ -77,18 +91,48 @@ launch_level() {   # stage level seconds args...
 }
 
 adb wait-for-device
+# The emulator can announce sys.boot_completed before the launcher/package manager is responsive.
+# Wait only for infrastructure readiness, not for the game to succeed: a crashed process still fails.
+ready=false
+for i in $(seq 1 30); do
+  if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] &&
+     adb shell pm path android > /dev/null 2>&1; then ready=true; break; fi
+  sleep 2
+done
+if [ "$ready" != true ]; then
+  echo "FAIL: emulator boot/package-manager not ready after 60s" > "$out/smoke.txt"
+  exit 1
+fi
+note "emulator ready (boot property and package manager)"
 abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r'); note "emulator ABIs: $abi"
 if ! adb install -r --no-incremental "$apk" > "$out/install.txt" 2>&1; then
   fail+=("install failed: $(tail -1 "$out/install.txt")")
 else
   # stage 1: normal start
   adb logcat -c
-  adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
-  sleep "$wait_s"
-  pid=$(adb shell pidof "$pkg" | tr -d '\r')
+  start_app start
+  # Poll once partway through instead of only after the full wait. This
+  # distinguishes an app that never starts from one that exits later.
+  early_wait=10
+  if [ "$wait_s" -lt "$early_wait" ]; then early_wait="$wait_s"; fi
+  sleep "$early_wait"
+  early_pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r')
+  if [ "$wait_s" -gt "$early_wait" ]; then sleep "$((wait_s - early_wait))"; fi
+  pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r')
+  note "start: pid at ${early_wait}s=${early_pid:-none}, at ${wait_s}s=${pid:-none}"
   adb exec-out screencap -p > "$out/screenshot.png" 2>/dev/null || rm -f "$out/screenshot.png"
   adb logcat -d > "$out/logcat.txt"
   [ -n "$pid" ] || fail+=("app not running after ${wait_s}s")
+  if [ -z "$pid" ]; then
+    note "start: emulator booted, package installed; possible startup regression or delayed initialization"
+    note "start: launcher output: $(tail -6 "$out/launch-start.txt" 2>/dev/null | tr '\n' ' ' | cut -c1-280)"
+    # Android historical exit reason is best-effort diagnostic evidence, not
+    # permission to ignore a missing process or silently relaunch the game.
+    if command -v timeout >/dev/null 2>&1; then
+      exit_summary=$(timeout 8s adb shell dumpsys activity exit-info "$pkg" 2>/dev/null | tail -n 18 | tr '\n' ' ' | cut -c1-1200 || true)
+      [ -z "$exit_summary" ] || note "start: Android process exit report: $exit_summary"
+    fi
+  fi
   grep -q "\[svz-fps\] settings:" "$out/logcat.txt" || fail+=("no [svz-fps] start line (SvzEnhanced.dll not loaded?)")
   grep -q "\[svz\] data:" "$out/logcat.txt" || fail+=("game data did not load ([svz] data: line missing)")
   check_errors start "$out/logcat.txt"
@@ -104,6 +148,11 @@ else
     if launch_level battle 2 60 --level=2 --killall=30; then
       grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"
+      if grep -q "\[svz-perf\] render-sync" "$out/logcat-battle.txt"; then
+        grep -m1 -o "\[svz-perf\].*" "$out/logcat-battle.txt" | sed 's/^/battle: /' >> "$out/details.txt"
+      else
+        warn+=("battle: no [svz-perf] render timing sample; profiler unverified")
+      fi
       grep -o "\[svz-death\].*" "$out/logcat-battle.txt" | head -3 | sed 's/^/battle: /' >> "$out/details.txt"
     fi
   fi

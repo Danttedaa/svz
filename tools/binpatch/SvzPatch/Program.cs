@@ -238,6 +238,8 @@ internal static class Program
 		var uiTextRef = new TypeReference("Svz", "UiText", module, asmRef);
 		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
 		PatchTextHalo(module, uiTextRef);
+		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
+		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -584,6 +586,72 @@ internal static class Program
 	}
 
 
+	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
+	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
+	private static void PatchPerFrameLookups(ModuleDefinition module, TypeReference reuse)
+	{
+		var sync = Method(module, "Svz.Render", "SyncRenderer", 1).Body;
+		var env = sync.Instructions.Where(i => Calls(i, "System.Environment", "GetEnvironmentVariable") &&
+			((MethodReference)i.Operand).Parameters.Count == 1).ToList();
+		Require(env.Count == 1, "Render.SyncRenderer reads one environment variable");
+		var cachedEnv = new MethodReference("CachedEnvironmentVariable", module.TypeSystem.String, reuse) { HasThis = false };
+		cachedEnv.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+		env[0].Operand = cachedEnv;
+
+		var dbg = Method(module, "Svz.Main", "DebugAutomation", 1).Body;
+		var args = dbg.Instructions.Where(i => Calls(i, "Godot.OS", "GetCmdlineUserArgs")).ToList();
+		Require(args.Count >= 1, "Main.DebugAutomation reads the command line");
+		var old = (MethodReference)args[0].Operand;
+		var cachedArgs = new MethodReference("CmdlineUserArgs", old.ReturnType, reuse) { HasThis = false };
+		foreach (var a in args) a.Operand = cachedArgs;
+		Require(PerFrameLookupsPatched(module), "per-frame lookups not cached");
+	}
+
+	private static bool PerFrameLookupsPatched(ModuleDefinition module) =>
+		!Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Any(i => Calls(i, "System.Environment", "GetEnvironmentVariable")) &&
+		!Method(module, "Svz.Main", "DebugAutomation", 1).Body.Instructions.Any(i => Calls(i, "Godot.OS", "GetCmdlineUserArgs")) &&
+		Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Any(i => i.Operand is MethodReference r && r.Name == "CachedEnvironmentVariable" && r.DeclaringType.Scope.Name == Enh);
+
+
+	// MeshCache.Get / GetSubsets: `arrays[i] = value` -> MeshArrays.Set(arrays, i, value) (disposes the
+	// Variant) and ArrayMesh.AddSurfaceFromArrays(...) -> MeshArrays.AddSurface(mesh, ...) (shared empty
+	// defaults, disposes the arrays). Same arguments; `this` becomes the first one.
+	private static readonly string[] MeshCacheMethods = { "Get", "GetSubsets" };
+
+	private static void PatchMeshInterop(ModuleDefinition module, TypeReference hooks)
+	{
+		var type = module.GetType("Svz.MeshCache") ?? throw new PatchException("type Svz.MeshCache not found");
+		int sets = 0, adds = 0;
+		foreach (var name in MeshCacheMethods)
+		{
+			var m = type.Methods.SingleOrDefault(x => x.Name == name) ?? throw new PatchException("MeshCache." + name + " not found");
+			foreach (var i in m.Body.Instructions)
+			{
+				if (i.OpCode != OpCodes.Callvirt || i.Operand is not MethodReference r) continue;
+				string hook = r.DeclaringType.FullName == "Godot.Collections.Array" && r.Name == "set_Item" && r.Parameters.Count == 2 ? "Set"
+					: r.DeclaringType.FullName == "Godot.ArrayMesh" && r.Name == "AddSurfaceFromArrays" && r.Parameters.Count == 5 ? "AddSurface" : null;
+				if (hook == null) continue;
+				var h = new MethodReference(hook, module.TypeSystem.Void, hooks) { HasThis = false };
+				h.Parameters.Add(new ParameterDefinition(r.DeclaringType));
+				foreach (var p in r.Parameters) h.Parameters.Add(new ParameterDefinition(p.ParameterType));
+				i.OpCode = OpCodes.Call; i.Operand = h;
+				if (hook == "Set") sets++; else adds++;
+			}
+		}
+		Require(sets >= 1 && adds >= 2, $"MeshCache builds surfaces with Array[i] = v and AddSurfaceFromArrays (found {sets}, {adds})");
+		Require(MeshInteropPatched(module), "mesh interop disposal not installed");
+	}
+
+	private static bool MeshInteropPatched(ModuleDefinition module)
+	{
+		var type = module.GetType("Svz.MeshCache");
+		if (type == null) return false;
+		var ins = type.Methods.Where(m => MeshCacheMethods.Contains(m.Name) && m.HasBody).SelectMany(m => m.Body.Instructions).ToList();
+		return ins.Any(i => i.Operand is MethodReference r && r.Name == "AddSurface" && r.DeclaringType.FullName == "Svz.MeshArrays" && r.DeclaringType.Scope.Name == Enh) &&
+			!ins.Any(i => i.Operand is MethodReference r && (r.Name == "AddSurfaceFromArrays" || (r.Name == "set_Item" && r.DeclaringType.FullName == "Godot.Collections.Array")));
+	}
+
+
 	private static bool SameSignatureType(TypeReference a, TypeReference b)
 	{
 		// Mono.Cecil uses source generic parameter names for definitions and
@@ -643,6 +711,8 @@ internal static class Program
 			("event-only animation clips last until their last event", ClipLengthPatched(m)),
 			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
+			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
+			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

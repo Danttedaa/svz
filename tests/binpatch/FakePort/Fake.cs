@@ -36,6 +36,12 @@ namespace Svz
 	public partial class Main : Node
 	{
 		public static Main Instance;
+		private int mCount;
+		private void DebugAutomation(double delta)
+		{
+			if (System.Linq.Enumerable.Contains(OS.GetCmdlineUserArgs(), "--corpses")) mCount++;
+			if (System.Linq.Enumerable.Contains(OS.GetCmdlineUserArgs(), "--trace-cam")) mCount++;
+		}
 
 		public override void _Ready()
 		{
@@ -161,6 +167,36 @@ namespace Svz
 		private static void FinishStates(FakeAnimation a)
 		{
 			foreach (var s in a.__states.ToArray()) { if (s != null) { } }
+		}
+
+	}
+
+	/// Same Godot call shapes as the port's MeshCache (built, never run off-engine here).
+	public static class MeshCache
+	{
+		public static ArrayMesh Get(ArrayMesh gm, Vector3[] pos, int[] idx)
+		{
+			var arrays = new Godot.Collections.Array();
+			arrays.Resize((int)Mesh.ArrayType.Max);
+			arrays[(int)Mesh.ArrayType.Vertex] = pos;
+			arrays[(int)Mesh.ArrayType.Index] = idx;
+			gm.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+			return gm;
+		}
+		public static ArrayMesh GetSubsets(ArrayMesh full, int surf)
+		{
+			var gm = new ArrayMesh();
+			gm.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, full.SurfaceGetArrays(surf));
+			return gm;
+		}
+	}
+
+	public static class Render
+	{
+		public static int Hidden;
+		private static void SyncRenderer(object r)
+		{
+			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;
 		}
 	}
 }

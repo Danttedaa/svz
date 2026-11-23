@@ -36,7 +36,27 @@ Both sign with the same key, so their APKs are updates of the same app.
 | `engine_repo`, `engine_ref` | public engine repository and branch/tag to build |
 | `package` | Android package id: keep it, a different one is a separate app with an empty save |
 | `app_name`, `version_code_base`, `keep_builds` | launcher name, versionCode start, how many APK releases to keep |
+| `keep_tags` | APK releases the cleanup never deletes (known-good builds, e.g. `apk-r3-45d610042402` = v1003) |
 | `original_sha256`, `cert_sha256` | pins written by the first build; builds refuse anything else |
+
+## Rolling back to a known-good build (phone only)
+
+Android does not install an older versionCode over a newer one without uninstalling, and uninstalling
+deletes the save game. So do **not** reinstall an old APK file. Rebuild the old engine instead; it gets a
+new, higher versionCode, the same key and package, and installs over any newer build with progress kept:
+
+1. **Actions → Build SvZ Enhanced APK (from port) → Run workflow**
+2. `engine_ref`: `45d610042402d52527cbfbd1d28a71bfdd64dceb` (v1003, the last build tested on the phone)
+3. Install the new release when Build status reports it.
+
+The original v1003 release (`apk-r3-45d610042402`) is kept for reference via `keep_tags`.
+
+## Emulator smoke test
+
+Every build is started on an Android x86_64 emulator: normal start, then the Store and a battle opened
+directly. Results (`smoke.txt`, screenshots, filtered logcat) are attached to the release. A failed smoke
+test publishes the APK only as a pre-release. The emulator is not your phone: 120 FPS, touch handling and
+Samsung power settings are only verified on the device.
 
 ## Restore the key on a computer
 

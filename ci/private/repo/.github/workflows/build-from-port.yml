@@ -17,6 +17,14 @@ on:
   schedule:
     - cron: "11 3 * * *"
   workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: >-
+          Optional engine commit/branch to build instead of svz-build.json's engine_ref. Rollback: enter
+          45d610042402d52527cbfbd1d28a71bfdd64dceb (the v1003 engine): it is rebuilt with a NEW, higher
+          versionCode and the same key, so it installs over any newer build and keeps your save.
+        required: false
+        default: ""
   repository_dispatch:
     types: [engine-updated]
 
@@ -69,7 +77,7 @@ jobs:
         if: steps.key.outputs.ready == 'true'
         env:
           REPO: ${{ steps.cfg.outputs.engine_repo }}
-          REF: ${{ github.event.client_payload.ref || steps.cfg.outputs.engine_ref }}
+          REF: ${{ github.event.inputs.engine_ref || github.event.client_payload.ref || steps.cfg.outputs.engine_ref }}
         run: |
           sha=$(git ls-remote "https://github.com/$REPO" "refs/heads/$REF" "refs/tags/$REF^{}" "refs/tags/$REF" | head -1 | cut -f1)
           if [ -z "$sha" ] && [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then sha="$REF"; fi
@@ -141,6 +149,15 @@ jobs:
           "$SVZ_PY" -I -c "import json; [print(f\"- {'✅' if r['passed'] else '❌'} {r['check']}: {r['detail'][:120]}\") for r in json.load(open('$out.verify.json'))['results']]" >> "$STATUS"
           { echo "apk=$out"; echo "version_code=$vc"; } >> "$GITHUB_OUTPUT"
 
+      - name: Preinstall Android 34 emulator image with retries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          # The emulator action occasionally fails with "Premature EOF" while
+          # downloading the Android 34 system image. Retry at the SDK layer.
+          # A failure here does not prevent the emulator action's own setup.
+          bash ci/install_emulator_sdk.sh
+
       - name: Enable KVM for the emulator
         if: steps.build.outcome == 'success'
         run: |
@@ -171,19 +188,46 @@ jobs:
           SMOKE: ${{ steps.smoke.outcome }}
         run: |
           smoke_dir="$RUNNER_TEMP/smoke"; extra=()
-          for f in "$smoke_dir/screenshot.png" "$smoke_dir/smoke.txt"; do [ -f "$f" ] && extra+=("$f"); done
-          if [ "$SMOKE" = success ]; then echo "- ✅ Emulator smoke test passed (x86_64 emulator, not your phone): $(head -1 "$smoke_dir/smoke.txt" 2>/dev/null)" >> "$STATUS"
-          else echo "- ⚠️ Emulator smoke test did not pass: $(head -3 "$smoke_dir/smoke.txt" 2>/dev/null | tr '\n' ' ') (the APK is published anyway; see smoke.txt)" >> "$STATUS"; fi
+          # Make failed runs diagnosable without another APK build; all assets
+          # remain in this private repository.
+          for f in "$smoke_dir/screenshot.png" "$smoke_dir/screenshot-store.png" "$smoke_dir/screenshot-battle.png" \
+                   "$smoke_dir/smoke.txt" "$smoke_dir/install.txt" "$smoke_dir/details.txt"; do
+            [ ! -f "$f" ] || extra+=("$f")
+          done
+          for log in logcat logcat-store logcat-battle; do
+            if [ -f "$smoke_dir/$log.txt" ]; then
+              grep -E "svz|godot|AndroidRuntime|Exception|FATAL" "$smoke_dir/$log.txt" | tail -n 1500 > "$smoke_dir/$log-tail.txt"
+              extra+=("$smoke_dir/$log-tail.txt")
+            fi
+          done
+          if [ "$SMOKE" = success ]; then
+            echo "- ✅ Emulator smoke test passed (x86_64 emulator, not your phone): $(head -1 "$smoke_dir/smoke.txt" 2>/dev/null)" >> "$STATUS"
+          else
+            echo "- ❌ Emulator smoke test FAILED or was unavailable. APK is experimental; do not install as a verified update." >> "$STATUS"
+          fi
           tag="apk-r${{ github.run_number }}-$SHORT"
           { echo "Private build from the port APK, engine \`${{ steps.engine.outputs.ref }}\` @ \`$SHORT\`, versionCode $VC."
             echo; echo "Installs next to the original port (package \`${{ steps.cfg.outputs.package }}\`). Later builds install over it and keep its save game."
-            echo; echo "Emulator smoke test: $SMOKE. 120 FPS is not verified until measured on the phone."; } > "$RUNNER_TEMP/notes.md"
+            echo; echo "Emulator smoke test: $SMOKE. 120 FPS is not verified until measured on the phone."
+            if [ "$SMOKE" != success ]; then
+              echo; echo "UNVERIFIED PRERELEASE — emulator failed or setup unavailable. Do not treat as tested."
+            fi; } > "$RUNNER_TEMP/notes.md"
+          # Failed emulator builds are tagged as prereleases, never as verified builds.
+          flags=()
+          if [ "$SMOKE" != success ]; then flags+=(--prerelease); fi
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "SvZ Enhanced $VC ($SHORT)" --notes-file "$RUNNER_TEMP/notes.md" \
-            "$APK" "$APK.verify.json" "${extra[@]}"
+            "${flags[@]}" "$APK" "$APK.verify.json" "${extra[@]}"
           echo "- 📦 **New APK:** release \`$tag\` → \`$(basename "$APK")\` (Releases of this repository)" >> "$STATUS"
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
             --jq '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | grep -vxF -f <(python3 -I ci/config.py get keep_tags) \
             | tail -n +$(( KEEP + 1 )) | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+
+      - name: Reject failed emulator smoke check
+        if: steps.build.outcome == 'success' && steps.smoke.outcome != 'success'
+        run: |
+          echo "::error::Emulator smoke test failed or did not start. Signed APK is published only as an unverified prerelease with available diagnostics."
+          exit 1
 
       - name: Report to the "Build status" issue
         if: always()

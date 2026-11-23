@@ -57,6 +57,8 @@ namespace Svz
 		private double mClock;
 		private double mKillAt = -1;
 		private Queue<double> mDumps;
+		// PC debug flags: read the command line once, not twice per frame
+		private static readonly bool sCorpses = OS.GetCmdlineUserArgs().Contains("--corpses"), sTraceCam = OS.GetCmdlineUserArgs().Contains("--trace-cam");
 
 		/// debug: kill every enemy (exercises death animations / melting)
 		private static void KillAll()
@@ -120,8 +122,8 @@ namespace Svz
 			}
 			if (mDumps != null && mDumps.Count > 0 && mClock >= mDumps.Peek()) { GD.Print($"[dump] ---- t={mDumps.Dequeue()}"); Dump(); }
 			if (mKillAt >= 0 && mClock >= mKillAt) { mKillAt = -1; KillAll(); }
-			if (OS.GetCmdlineUserArgs().Contains("--corpses") && Time.frameCount % 120 == 0) CountCorpses();
-			if (mKillAt == -1 && Camera.main != null && OS.GetCmdlineUserArgs().Contains("--trace-cam") && Time.frameCount % 10 == 0)
+			if (sCorpses && Time.frameCount % 120 == 0) CountCorpses();
+			if (mKillAt == -1 && sTraceCam && Camera.main != null && Time.frameCount % 10 == 0)
 			{
 				var ct = Camera.main.transform;
 				GD.Print($"[cam] t={mClock:0.00} pos={ct.position.x:0.000},{ct.position.y:0.000},{ct.position.z:0.000} euler={ct.eulerAngles.x:0.0000},{ct.eulerAngles.y:0.0000},{ct.eulerAngles.z:0.0000} parent={ct.parent?.name}");

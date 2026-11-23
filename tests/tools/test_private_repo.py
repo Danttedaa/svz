@@ -43,7 +43,8 @@ class Config(unittest.TestCase):
 
     def test_invalid_values(self):
         bad = [("engine_repo", "not a repo"), ("engine_ref", "a..b"), ("package", "svz"),
-               ("keep_builds", 0), ("original_sha256", "XYZ"), ("cert_sha256", "a" * 64), ("surprise", 1)]
+               ("keep_builds", 0), ("original_sha256", "XYZ"), ("cert_sha256", "a" * 64), ("surprise", 1),
+               ("keep_tags", "apk-r3-x"), ("keep_tags", ["port-input"]), ("keep_tags", [3])]
         for key, value in bad:
             with open(self.path) as f:
                 data = json.load(f)
@@ -53,6 +54,17 @@ class Config(unittest.TestCase):
             with self.assertRaises(cfgmod.ConfigError, msg=key):
                 cfgmod.load(self.path)
             shutil.copy(os.path.join(REPO, "svz-build.json"), self.path)
+
+    def test_keep_tags_protect_rollback_builds(self):
+        with open(self.path) as f:
+            data = json.load(f)
+        data["keep_tags"] = ["apk-r3-45d610042402"]
+        with open(self.path, "w") as f:
+            json.dump(data, f)
+        self.assertEqual(cfgmod.load(self.path)["keep_tags"], ["apk-r3-45d610042402"])
+        wf = open(os.path.join(REPO, ".github", "workflows", "build-from-port.yml")).read()
+        self.assertIn("grep -vxF -f <(python3 -I ci/config.py get keep_tags)", wf, "cleanup must skip keep_tags")
+        self.assertNotIn("apk-r3-45d610042402", wf, "protected tags belong in svz-build.json, not the workflow")
 
     def test_keytool_fingerprint(self):
         out = "Alias name: svz\n\t SHA1: 11:22\n\t SHA256: " + ":".join(["AB"] * 32) + "\n"

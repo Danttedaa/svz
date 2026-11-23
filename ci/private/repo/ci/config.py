@@ -24,6 +24,8 @@ DEFAULTS = {
     "app_name": "SvZ Enhanced",
     "version_code_base": 1000,
     "keep_builds": 5,
+    # release tags never deleted by the keep_builds cleanup (known-good rollback builds, e.g. v1003)
+    "keep_tags": [],
     "original_sha256": "",
     "cert_sha256": "",
     # build from a prebuilt port APK (build-from-port.yml); its SHA-256 and signer are pinned here
@@ -60,6 +62,8 @@ def validate(cfg):
         raise ConfigError("package is not a valid Android package id")
     if not cfg["app_name"].strip() or '"' in cfg["app_name"]:
         raise ConfigError("app_name is invalid")
+    if not isinstance(cfg["keep_tags"], list) or not all(isinstance(t, str) and re.fullmatch(r"apk-[\w.-]+", t) for t in cfg["keep_tags"]):
+        raise ConfigError("keep_tags must be a list of apk-... release tags")
     for k in ("version_code_base", "keep_builds"):
         if not isinstance(cfg[k], int) or cfg[k] < 1:
             raise ConfigError(f"{k} must be a positive integer")
@@ -152,7 +156,7 @@ def main(argv):
         cmd = argv[0]
         if cmd == "get":
             v = load()[argv[1]]
-            print(v)
+            print("\n".join(v) if isinstance(v, list) else v)
         elif cmd == "set":
             set_pin(argv[1], argv[2])
         elif cmd == "validate":

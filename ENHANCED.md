@@ -209,3 +209,87 @@ No enemy logic, rewards, textures, or visuals are changed.
 
 This is a targeted **allocation** optimization, not yet a measured FPS gain:
 compare on-device before and after during a similarly effect-heavy wave.
+
+## Audit of M3–M8 (2026-11-23, against the real port APK)
+
+Method: the pinned port APK (`d9dfad74…`) was run **headless on Linux** (official Godot 4.7.2 .NET + .NET 9
+runtime, the APK's own `assets/` as the project), with a local-only harness assembly injected into a copy of
+`SvZPort.dll` (skips tutorials/narration, keeps the hero alive, kills enemies with every attack type, reports
+corpses still in `CharactersManager.mDyingCharacters`, per-subsystem CPU/allocation probes). Screenshots
+were rendered with Xvfb + Mesa llvmpipe at 2340×1080. Neither the harness nor screenshots (game art) are in
+this repository.
+
+| milestone | finding | action |
+|---|---|---|
+| M3/M4 victory wait | correct for normal wins (exit 1.6 s after victory, `RegisterWin` then `onFinishGameRequest`, each once) but also cut the one-time **wave-70 story ending** (`EndGameMessage`) to 1 s | M9: that ending keeps its configured time (measured 7.5 s) |
+| M5 fallback diagnostics | correct; no gameplay effect | none |
+| M6 stuck-corpse timeout | a workaround, not a fix; counted wall time, so a pause or the slow-motion finish could cut a death animation | M9: root cause fixed; the net now counts game time |
+| M7 HD fonts | **regression** (v1006/v1008): the port draws glyphs at the font's native pixel size, so the 1536 set drew all text 2× larger; Store dialog overflowed, captions cut | M10: HD atlas drawn at the original size |
+| M8 snapshot reuse | correct (no re-entrancy into the same list inside those loops); small effect | kept |
+
+## Milestone 9: frozen zombies, root cause
+
+Reproduced headless: **every enemy killed by an explosion, by the sonic attack, or as the last enemy of a
+wave froze** (35/35 Explosion/Sonic kills stayed until M6's 12 s removal). Cause: the game's shared tagged
+`dieexplode` animation clip has events (`OnAnimStart` at 0 s, `OnAnimDone` at 1/30 s) but no curves. The
+port computed a clip's length from its curves only, so the clip had length 0: its state never reached
+`normalizedTime` 1 and its events never fired, so `CharacterModelController.readyToVanish` stayed false. Only
+two clips in the whole game have no curves (this one and an unused emitter clip).
+
+- Engine source: an event-only clip lasts until its last event. Binary patch: `AnimationClip.get_length`
+  passes its value through `AnimationFixes.ClipLength` (only zero lengths change).
+- Result: 0 frozen corpses (Explosion/Sonic stress, waves 8/25/70; wave 70: 303/303 vanished through the
+  game's own path); the explosion's `SpawnEffectPrefab` event now plays again.
+- M6 stays as a safety net for unknown cases: 12 **game**-seconds (`Time.time` from the call site; the
+  longest legitimate death is ~7.1 s), logged as `[svz-death]` via `GD.Print`.
+- Wave-70 story ending: see the audit table.
+
+## Milestone 10: readable Store and Allies text
+
+- The 1536 font atlas is still loaded on 700–1536 px screens, but each loaded font's glyph metrics are
+  scaled once (hook after `SUILabel`'s font load) by `nearest/1536 × text scale`. At the default 100 % the
+  layout is identical to the original game, with sharper glyphs; the game's own word wrapping measures the
+  scaled glyphs.
+- Contrast: every `GUIText` is drawn twice; the first pass draws a soft 8-direction halo from a white,
+  alpha-only (LA8) copy of its atlas: warm light behind dark text, dark behind light text. Dark captions on
+  the red Store scroll and the grey "UNLOCK AT WAVE n" labels on the Allies tab become legible.
+- **Hold 3 fingers for 2 s** to switch the text size between 100 % and 115 % (130 % clipped wrapped Store
+  captions, so it is not offered). Settings: `user://svz_ui.cfg`, `[text] scale` (80–150) and `contrast`.
+
+## Milestone 11: crowded-wave hitches
+
+Profiled on the real port, wave 70, crowd kept alive (probes around every subsystem of `Main._Process`,
+CPU sampling with `dotnet-trace`):
+
+| subsystem | CPU / frame (desktop) | allocated / frame |
+|---|---|---|
+| `Render.Sync` (skinning ~50 % of the thread, then particle mesh rebuilds) | 2.8 ms | 85 KB |
+| `AnimationSystem.Update` (`Apply`) | 0.8 ms | 281 KB |
+
+Garbage collections every ~5 s took 150–400 ms. Allocation volume was not the main factor: GodotSharp's
+`DisposablesTracker` held 100,000–450,000 undisposed interop objects between collections, and every
+collection had to finalize them. A large share came from `MeshCache`, which rebuilds every particle mesh
+every frame: one `Variant` per vertex attribute (each owning a native copy of the array), the arrays
+`Godot.Collections.Array`, and the empty blend-shape array and LOD dictionary that the
+`AddSurfaceFromArrays` binding allocates for its null defaults.
+
+Shipped (binary patch and engine source):
+
+- `MeshCache.Get/GetSubsets`: interop temporaries are disposed as soon as Godot has its copy; the empty
+  defaults are shared (`MeshArrays`).
+- `Render.SyncRenderer` read an environment variable per particle renderer per frame, and
+  `Main.DebugAutomation` fetched the command line twice per frame: both are read once (`Reuse`).
+
+Result (interleaved A/B, 3 rounds, wave 70, process CPU time per frame at the normal 120 FPS cap):
+**CPU −15 % (1.75 → 1.50 ms), worst garbage-collection hitch −55 % (243–314 ms → 110–137 ms)**, no
+frozen corpses. Desktop CoreCLR numbers; the phone runs Mono, so check the FPS readout in a crowded wave.
+
+Tried and rejected (measured, not shipped):
+
+- Caching bone poses / one `SetBonePose` call instead of three setters: bones are posed in world space, 98 %
+  change every frame, and the cost is Godot's native side. No gain.
+- Reusing `AnimationSystem.Apply`'s list and dictionaries (shared or one set per animated object): cut
+  allocations by 56 % and GC events by half, yet consistently cost +1.5 ms CPU per frame. The mechanism
+  was not identified, so it was not shipped.
+- Benchmarks must be interleaved A/B runs: this VM's speed drifted by 2× between runs.
+

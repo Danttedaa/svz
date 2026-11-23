@@ -577,11 +577,13 @@ namespace Svz
 			return best ?? Camera.main;
 		}
 
+		private static readonly bool sNoParticles = System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1";   // read once, not per renderer per frame
+
 		private static void SyncRenderer(Renderer r)
 		{
 			var go = r.__go;
 			bool vis = r.__enabled && go != null && go.__active && !go.__isAsset && !r.__destroyed;
-			if (vis && r is ParticleRenderer && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") vis = false;
+			if (vis && r is ParticleRenderer && sNoParticles) vis = false;
 			if (vis && r is ParticleRenderer pr) Particles.BuildMesh(pr, CameraFor(go.__layer));
 			Mesh mesh = vis ? r.__Mesh : null;
 			if (mesh == null || mesh.vertexCount == 0) vis = false;
@@ -626,6 +628,27 @@ namespace Svz
 	/// Unity Mesh -> Godot ArrayMesh (mirrored Z, flipped winding, flipped V)
 	public static class MeshCache
 	{
+		// Particle meshes are rebuilt every frame. Free the Godot interop temporaries right away instead of
+		// leaving them to the finalizer: crowded waves otherwise piled up 100k+ tracked disposables and every
+		// garbage collection had to finalize them (150-400 ms hitches).
+		private static G.Collections.Array<G.Collections.Array> sNoBlendShapes;
+		private static G.Collections.Dictionary sNoLods;
+
+		private static void Put(G.Collections.Array arrays, int index, G.Variant value)
+		{
+			try { arrays[index] = value; } finally { value.Dispose(); }
+		}
+
+		private static void AddSurface(G.ArrayMesh mesh, G.Collections.Array arrays)
+		{
+			try
+			{
+				mesh.AddSurfaceFromArrays(G.Mesh.PrimitiveType.Triangles, arrays,
+					sNoBlendShapes ??= new G.Collections.Array<G.Collections.Array>(), sNoLods ??= new G.Collections.Dictionary());
+			}
+			finally { arrays.Dispose(); }
+		}
+
 		private static readonly Dictionary<(Mesh, string), (G.ArrayMesh mesh, int version)> sSubsets = new Dictionary<(Mesh, string), (G.ArrayMesh, int)>();
 
 		/// a mesh made of selected submeshes of a (static batch) combined mesh
@@ -642,14 +665,14 @@ namespace Svz
 			foreach (int sub in subsets)
 			{
 				if (!surfaceOf.TryGetValue(sub, out int surf) || surf >= full.GetSurfaceCount()) continue;
-				gm.AddSurfaceFromArrays(G.Mesh.PrimitiveType.Triangles, full.SurfaceGetArrays(surf));
+				AddSurface(gm, full.SurfaceGetArrays(surf));
 			}
 			if (gm.GetSurfaceCount() == 0)
 			{
 				var arrays = new G.Collections.Array();
 				arrays.Resize((int)G.Mesh.ArrayType.Max);
-				arrays[(int)G.Mesh.ArrayType.Vertex] = new G.Vector3[] { G.Vector3.Zero, G.Vector3.Zero, G.Vector3.Zero };
-				gm.AddSurfaceFromArrays(G.Mesh.PrimitiveType.Triangles, arrays);
+				Put(arrays, (int)G.Mesh.ArrayType.Vertex, new G.Vector3[] { G.Vector3.Zero, G.Vector3.Zero, G.Vector3.Zero });
+				AddSurface(gm, arrays);
 			}
 			sSubsets[key] = (gm, m.__version);
 			return gm;
@@ -688,22 +711,22 @@ namespace Svz
 				Array.Copy(tri, idx, idx.Length);   // Z mirror already turns Unity winding into Godot front faces
 				var arrays = new G.Collections.Array();
 				arrays.Resize((int)G.Mesh.ArrayType.Max);
-				arrays[(int)G.Mesh.ArrayType.Vertex] = pos;
-				if (nrm != null) arrays[(int)G.Mesh.ArrayType.Normal] = nrm;
-				if (uv != null) arrays[(int)G.Mesh.ArrayType.TexUV] = uv;
-				if (uv2 != null) arrays[(int)G.Mesh.ArrayType.TexUV2] = uv2;
-				if (col != null) arrays[(int)G.Mesh.ArrayType.Color] = col;
-				if (bones != null) { arrays[(int)G.Mesh.ArrayType.Bones] = bones; arrays[(int)G.Mesh.ArrayType.Weights] = weights; }
-				arrays[(int)G.Mesh.ArrayType.Index] = idx;
-				gm.AddSurfaceFromArrays(G.Mesh.PrimitiveType.Triangles, arrays);
+				Put(arrays, (int)G.Mesh.ArrayType.Vertex, pos);
+				if (nrm != null) Put(arrays, (int)G.Mesh.ArrayType.Normal, nrm);
+				if (uv != null) Put(arrays, (int)G.Mesh.ArrayType.TexUV, uv);
+				if (uv2 != null) Put(arrays, (int)G.Mesh.ArrayType.TexUV2, uv2);
+				if (col != null) Put(arrays, (int)G.Mesh.ArrayType.Color, col);
+				if (bones != null) { Put(arrays, (int)G.Mesh.ArrayType.Bones, bones); Put(arrays, (int)G.Mesh.ArrayType.Weights, weights); }
+				Put(arrays, (int)G.Mesh.ArrayType.Index, idx);
+				AddSurface(gm, arrays);
 			}
 			if (gm.GetSurfaceCount() == 0)
 			{
 				// keep a valid (empty) surface so materials can be assigned
 				var arrays = new G.Collections.Array();
 				arrays.Resize((int)G.Mesh.ArrayType.Max);
-				arrays[(int)G.Mesh.ArrayType.Vertex] = new G.Vector3[] { G.Vector3.Zero, G.Vector3.Zero, G.Vector3.Zero };
-				gm.AddSurfaceFromArrays(G.Mesh.PrimitiveType.Triangles, arrays);
+				Put(arrays, (int)G.Mesh.ArrayType.Vertex, new G.Vector3[] { G.Vector3.Zero, G.Vector3.Zero, G.Vector3.Zero });
+				AddSurface(gm, arrays);
 			}
 			// skinned meshes move far from their bind pose; avoid culling issues
 			if (bones != null) gm.CustomAabb = new G.Aabb(new G.Vector3(-1e4f, -1e4f, -1e4f), new G.Vector3(2e4f, 2e4f, 2e4f));

@@ -147,7 +147,26 @@ internal sealed class FontSetFinder
 
 namespace Svz
 {
-	// Stand-in iteration shapes only; no proprietary particle/animation data.
+	// Private mesh arrays for the particle optimization fixture (no game asset data).
+namespace UnityEngine
+{
+    public struct Vector3 { public float x, y, z; }
+    public struct Vector2 { public float x, y; }
+    public struct Color { public float r, g, b, a; }
+    public sealed class Mesh
+    {
+        internal Vector3[] __v = Array.Empty<Vector3>();
+        internal Vector2[] __uv = Array.Empty<Vector2>();
+        internal Color[] __c = Array.Empty<Color>();
+    }
+    public sealed class ParticleRenderer
+    {
+        internal readonly Mesh __pmesh = new Mesh();
+        public int ParticleCount { get; set; }
+    }
+}
+
+// Stand-in iteration shapes only; no proprietary particle/animation data.
 	public class FakeParticleEmitter { }
 	public class FakeAnimationState { }
 	public class FakeAnimation
@@ -157,6 +176,24 @@ namespace Svz
 	public static class Particles
 	{
 		public static readonly System.Collections.Generic.List<FakeParticleEmitter> Emitters = new();
+        // The three source allocations below mirror the field/call sequence in
+        // the publicly documented port; only sizes and array identity matter.
+        public static UnityEngine.Mesh BuildMesh(UnityEngine.ParticleRenderer r, object camera)
+        {
+            var mesh = r.__pmesh;
+            int n = r.ParticleCount;
+            var v = new UnityEngine.Vector3[n * 4];
+            var uv = new UnityEngine.Vector2[n * 4];
+            var col = new UnityEngine.Color[n * 4];
+            for (int i = 0; i < n * 4; i++)
+            {
+                v[i] = new UnityEngine.Vector3 { x = i + n };
+                uv[i] = new UnityEngine.Vector2 { x = i };
+                col[i] = new UnityEngine.Color { a = n };
+            }
+            mesh.__v = v; mesh.__uv = uv; mesh.__c = col;
+            return mesh;
+        }
 		public static void Update(float dt)
 		{
 			foreach (var e in Emitters.ToArray()) { if (e != null) { } }

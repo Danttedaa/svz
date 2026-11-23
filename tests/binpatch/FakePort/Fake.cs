@@ -71,3 +71,36 @@ namespace Svz
 		private void onFinishGameRequest() { Finished++; }
 	}
 }
+
+
+// Synthetic dying-list pattern for the verified, fail-closed IL hook.
+// No proprietary game code or assets are included here.
+public class Character
+{
+	public virtual bool isOver => false;
+	public virtual float health => 0f;
+	public virtual bool isPlayer => false;
+	public virtual bool isBase => false;
+	public virtual void Destroy() { }
+}
+
+public class CharactersManager
+{
+	private readonly System.Collections.Generic.List<Character> mDyingCharacters = new();
+	private void UpdateBattle()
+	{
+		for (int i = mDyingCharacters.Count - 1; i >= 0; i--)
+		{
+			Character dying = mDyingCharacters[i];
+			if (dying.isOver && !dying.isPlayer && !dying.isBase)
+			{
+				dying.Destroy();
+				mDyingCharacters.RemoveAt(i);
+			}
+			else if (dying.health > 0f)
+			{
+				mDyingCharacters.RemoveAt(i);
+			}
+		}
+	}
+}

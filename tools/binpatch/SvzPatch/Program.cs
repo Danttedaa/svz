@@ -82,6 +82,14 @@ internal static class Program
 			x.Parameters.Count == 1 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
 			x.ReturnType.FullName == "System.Collections.IEnumerator");
 		Require(victoryMethod != null, "VictoryTiming.WaitRealSeconds(float) must return IEnumerator");
+		var death = enhanced.GetType("Svz.DeathCleanup") ?? throw new PatchException("Svz.DeathCleanup missing");
+		var deathMethod = death.Methods.SingleOrDefault(x => x.Name == "ShouldRemove" && x.IsPublic && x.IsStatic &&
+			x.Parameters.Count == 3 && x.Parameters[0].ParameterType.FullName == "System.Object" &&
+			x.Parameters[1].ParameterType.FullName == "System.Boolean" &&
+			x.Parameters[2].ParameterType.FullName == "System.Single" &&
+			x.ReturnType.FullName == "System.Boolean");
+		Require(deathMethod != null, "DeathCleanup.ShouldRemove(object,bool,float) required");
+
 
 
 		// references built from types SvZPort.dll already uses (no second System.Runtime reference)
@@ -90,6 +98,7 @@ internal static class Program
 		var fpRef = new TypeReference("Svz", "FramePacing", module, asmRef);
 		var polRef = new TypeReference("Svz", "FramePacingPolicy", module, asmRef);
 		var victoryRef = new TypeReference("Svz", "VictoryTiming", module, asmRef);
+		var deathRef = new TypeReference("Svz", "DeathCleanup", module, asmRef);
 		var ts = module.TypeSystem;
 		var nodeRef = ExistingTypeRef(module, "Godot.Node");
 		var actionOpen = module.GetTypeReferences().FirstOrDefault(t => t.FullName == "System.Action`1");
@@ -115,6 +124,7 @@ internal static class Program
 		var effectiveFps = M(fpRef, "get_EffectiveFps", ts.Int32);
 		var smooth = M(polRef, "SmoothDeltaTime", ts.Single, ts.Single, ts.Single);
 		var realtimeWait = M(victoryRef, "WaitRealSeconds", ExistingTypeRef(module, "System.Collections.IEnumerator"), ts.Single);
+		var shouldRemove = M(deathRef, "ShouldRemove", ts.Boolean, ts.Object, ts.Boolean, ts.Single);
 		var actionCtor = new MethodReference(".ctor", ts.Void, actionString) { HasThis = true };
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.Object));
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.IntPtr));
@@ -194,6 +204,7 @@ internal static class Program
 		// Shorten only the regular win coroutine's wait. Reward registration and the exit
 		// handler are left in their original order; abort if the compiled game's shape changed.
 		PatchWinDelay(module, realtimeWait);
+		PatchStuckCorpses(module, shouldRemove);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -264,6 +275,45 @@ internal static class Program
 		Require(WinDelayPatched(module), "PostWinDelay real-time wait not installed");
 	}
 
+
+	/// Target only the dying-character cleanup gate. The game has already
+	/// registered kills and awarded drops before adding a Character to this list.
+	/// Normal completed death animations follow the original isOver path.
+	private static void PatchStuckCorpses(ModuleDefinition module, MethodReference hook)
+	{
+		var target = Method(module, "CharactersManager", "UpdateBattle", 0);
+		var body = target.Body;
+		body.SimplifyMacros();
+		var hits = body.Instructions.Where(i => Calls(i, "Character", "get_isOver")).ToArray();
+		Require(hits.Length == 1, "CharactersManager.UpdateBattle contains one dying-character isOver check");
+		var call = hits[0];
+		Require(call.Previous.OpCode == OpCodes.Ldloc && call.Previous.Operand is VariableDefinition,
+			"dying-character isOver getter receiver is a local variable");
+		var character = (VariableDefinition)call.Previous.Operand;
+		var healthGetter = module.ImportReference(Method(module, "Character", "get_health", 0));
+		var il = body.GetILProcessor();
+		// Existing stack: [character] before isOver; preserve it for ShouldRemove.
+		il.InsertBefore(call, il.Create(OpCodes.Dup));
+		var load = il.Create(OpCodes.Ldloc, character);
+		il.InsertAfter(call, load);
+		var health = il.Create(OpCodes.Callvirt, healthGetter);
+		il.InsertAfter(load, health);
+		il.InsertAfter(health, il.Create(OpCodes.Call, hook));
+		body.OptimizeMacros();
+		Require(StuckCorpsesPatched(module), "dying-character cleanup gate not patched");
+	}
+
+	private static bool StuckCorpsesPatched(ModuleDefinition module)
+	{
+		var target = Method(module, "CharactersManager", "UpdateBattle", 0);
+		var calls = target.Body.Instructions.Where(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference m && m.DeclaringType.FullName == "Svz.DeathCleanup" &&
+			m.DeclaringType.Scope.Name == Enh && m.Name == "ShouldRemove").ToArray();
+		return calls.Length == 1 &&
+			target.Body.Instructions.Any(i => Calls(i, "Character", "get_isOver")) &&
+			target.Body.Instructions.Any(i => Calls(i, "Character", "get_health"));
+	}
+
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
 	private static bool Resolves(string patched, string enhancedPath)
 	{
@@ -300,6 +350,7 @@ internal static class Program
 			("Application.targetFrameRate setter", CallsEnh("UnityEngine.Application", "set_targetFrameRate", 1, "GameRequested")),
 			("assembly reference SvzEnhanced", m.AssemblyReferences.Any(a => a.Name == Enh)),
 			("PostWinDelay uses unscaled real-time wait", WinDelayPatched(m)),
+			("dying enemy cleanup has safe timeout", StuckCorpsesPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

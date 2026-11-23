@@ -162,3 +162,18 @@ without requiring a laptop or ADB logs.
 
 The original safe fallback thresholds and behavior are unchanged; diagnostics
 do not disable the fallback or force 120 FPS during overloaded combat.
+
+## Milestone 6 — stuck corpse failsafe (experimental)
+
+Reported bug: some defeated zombies remain visible and motionless. The game
+already awards enemy kill credit and resources **before** moving an enemy to
+`CharactersManager.mDyingCharacters`. The usual `isOver` condition waits for
+animation / `ModelMelter` callback and sometimes appears to remain false.
+
+In that existing dying-list cleanup pass alone, the bytecode patch retains the
+original `isOver` check and adds a conservative 12-second **unscaled wall time**
+failsafe for a still-dead character. Revived characters reset the timer and
+follow their original return-to-battle path. No general active enemies, damage,
+health, rewards, save or animation callbacks are changed. This must be tested
+in game before calling the frozen-zombie defect fixed. A log line beginning
+`[svz-death]` is emitted if the failsafe triggers.

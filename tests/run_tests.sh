@@ -17,6 +17,9 @@ dotnet run --project "$here/FramePacing.Tests"
 echo "== unscaled victory timer"
 dotnet run --project "$here/VictoryTiming.Tests"
 
+echo "== stuck corpse safety"
+dotnet run --project "$here/DeathCleanup.Tests"
+
 godot_dir="${1:-}"
 [ -n "$godot_dir" ] || { echo "(skipping Godot runtime test: pass the Godot 4.7.2 .NET directory)"; exit 0; }
 godot_bin="$(ls "$godot_dir"/Godot_v4.7.2-stable_mono_linux*.x86_64 2>/dev/null | head -1)"

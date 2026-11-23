@@ -1,0 +1,246 @@
+# SvZ Enhanced: private APK build.
+#
+# Copy this file to .github/workflows/build-apk.yml in a PRIVATE repository (tools/private_build_setup.sh
+# does it). It must never run in a public repository: the APK it builds contains the original game.
+#
+# What it does
+#   1. resolves the engine commit (public repo, e.g. Danttedaa/svz) to build
+#   2. downloads YOUR original game files from this private repo's release "original"
+#      (uploaded once by tools/private_build_setup.sh), checks their SHA-256
+#   3. builds with the engine's pinned toolchain (Nix flake: Godot 4.7.2 .NET, .NET 9, Android SDK)
+#   4. signs with your release key (repo secrets), refusing any other key
+#   5. verifies the APK (arm64-v8a, no INTERNET permission, signer, refresh-rate bridge, apksigner)
+#   6. publishes it as a release of THIS private repository, keeps the newest SVZ_KEEP_BUILDS builds
+#
+# Triggers: manual (Actions > Build SvZ Enhanced APK > Run workflow), a daily check for new engine commits,
+# and repository_dispatch "engine-updated" (optional notifier in the public repo).
+#
+# Secrets:   SVZ_KEYSTORE_B64, SVZ_KEYSTORE_PASSWORD, SVZ_KEYSTORE_ALIAS
+# Variables: SVZ_ORIGINAL_SHA256, SVZ_CERT_SHA256 (required)
+#            SVZ_ENGINE_REPO (Danttedaa/svz), SVZ_ENGINE_REF (main), SVZ_PACKAGE (io.github.danttedaa.svz),
+#            SVZ_APP_NAME (SvZ Enhanced), SVZ_KEEP_BUILDS (5), SVZ_VERSION_CODE_BASE (1000)
+name: Build SvZ Enhanced APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: "Engine branch, tag or commit (empty: variable SVZ_ENGINE_REF, else main)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "41 2 * * *"     # daily: build only if the engine has a commit that was not built yet
+  repository_dispatch:
+    types: [engine-updated]
+
+permissions:
+  contents: write            # create releases in this (private) repository
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+env:
+  ENGINE_REPO: ${{ vars.SVZ_ENGINE_REPO || 'Danttedaa/svz' }}
+  ENGINE_REF: ${{ inputs.engine_ref || github.event.client_payload.ref || vars.SVZ_ENGINE_REF || 'main' }}
+  PACKAGE: ${{ vars.SVZ_PACKAGE || 'io.github.danttedaa.svz' }}
+  APP_NAME: ${{ vars.SVZ_APP_NAME || 'SvZ Enhanced' }}
+  KEEP_BUILDS: ${{ vars.SVZ_KEEP_BUILDS || '5' }}
+  VERSION_CODE_BASE: ${{ vars.SVZ_VERSION_CODE_BASE || '1000' }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Refuse to run in a public repository
+        if: ${{ github.event.repository.private != true }}
+        run: |
+          echo "::error::This workflow embeds the original game in the APK. Run it only in a private repository."
+          exit 1
+
+      - name: Check configuration
+        env:
+          ORIGINAL_SHA256: ${{ vars.SVZ_ORIGINAL_SHA256 }}
+          CERT_SHA256: ${{ vars.SVZ_CERT_SHA256 }}
+          HAS_KEY: ${{ secrets.SVZ_KEYSTORE_B64 != '' && secrets.SVZ_KEYSTORE_PASSWORD != '' && secrets.SVZ_KEYSTORE_ALIAS != '' }}
+        run: |
+          missing=""
+          [ -n "$ORIGINAL_SHA256" ] || missing="$missing variable:SVZ_ORIGINAL_SHA256"
+          [ -n "$CERT_SHA256" ] || missing="$missing variable:SVZ_CERT_SHA256"
+          [ "$HAS_KEY" = true ] || missing="$missing secrets:SVZ_KEYSTORE_B64/PASSWORD/ALIAS"
+          [ -z "$missing" ] || { echo "::error::Not configured:$missing (run tools/private_build_setup.sh)"; exit 1; }
+
+      - name: Resolve engine commit
+        id: engine
+        run: |
+          ref="$ENGINE_REF"
+          sha=$(git ls-remote "https://github.com/$ENGINE_REPO" "refs/heads/$ref" "refs/tags/$ref^{}" "refs/tags/$ref" | head -1 | cut -f1)
+          if [ -z "$sha" ] && [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then sha="$ref"; fi
+          [ -n "$sha" ] || { echo "::error::cannot resolve $ENGINE_REPO@$ref"; exit 1; }
+          short=${sha:0:12}
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          built=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -c -- "-$short\$" || true)
+          if [ "${{ github.event_name }}" = schedule ] && [ "$built" != 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$ENGINE_REPO@$short ($ref) is already built; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out engine
+        if: steps.engine.outputs.skip != 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ steps.engine.outputs.sha }}
+          path: engine
+          persist-credentials: false
+
+      - name: Free disk space
+        if: steps.engine.outputs.skip != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Original game files (private release "original")
+        if: steps.engine.outputs.skip != 'true'
+        env:
+          ORIGINAL_SHA256: ${{ vars.SVZ_ORIGINAL_SHA256 }}
+        run: |
+          mkdir -p engine/original
+          gh release download original --repo "$GITHUB_REPOSITORY" --pattern 'svz-original.*' --dir engine/original
+          mv engine/original/svz-original.apk engine/original/svz.apk
+          echo "$ORIGINAL_SHA256  engine/original/svz.apk" | sha256sum -c --quiet || { echo "::error::original APK does not match SVZ_ORIGINAL_SHA256"; exit 1; }
+          if [ -f engine/original/svz-original.obb ]; then echo "obb=$PWD/engine/original/svz-original.obb" >> "$GITHUB_ENV"; fi
+          ls -l engine/original
+
+      - name: Signing key
+        if: steps.engine.outputs.skip != 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.SVZ_KEYSTORE_B64 }}
+        run: |
+          mkdir -p engine/keys
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > engine/keys/svz.jks
+          echo "SVZ_KEYSTORE=$PWD/engine/keys/svz.jks" >> "$GITHUB_ENV"
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31
+        if: steps.engine.outputs.skip != 'true'
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Build signed arm64 APK
+        if: steps.engine.outputs.skip != 'true'
+        working-directory: engine
+        env:
+          SVZ_KEYSTORE_ALIAS: ${{ secrets.SVZ_KEYSTORE_ALIAS }}
+          SVZ_KEYSTORE_PASSWORD: ${{ secrets.SVZ_KEYSTORE_PASSWORD }}
+          SVZ_EXPECT_CERT_SHA256: ${{ vars.SVZ_CERT_SHA256 }}
+        run: |
+          vc=$(( VERSION_CODE_BASE + ${{ github.run_number }} ))
+          echo "version_code=$vc" >> "$GITHUB_ENV"
+          obb_args=(); [ -z "${obb:-}" ] || obb_args=(--obb "$obb")
+          nix develop -c tools/build.sh --platform android "${obb_args[@]}" \
+            --package "$PACKAGE" --app-name "$APP_NAME" \
+            --version-code "$vc" --version-name "enhanced-${{ steps.engine.outputs.short }}"
+
+      - name: Verify APK
+        if: steps.engine.outputs.skip != 'true'
+        working-directory: engine
+        env:
+          CERT_SHA256: ${{ vars.SVZ_CERT_SHA256 }}
+        run: |
+          python3 -m pip install --quiet --user androguard==4.1.4
+          sdk=$(nix develop -c printenv ANDROID_HOME | tail -1)
+          apksigner=$(ls -d "$sdk"/build-tools/*/ | sort -V | tail -1)apksigner
+          python3 -I tools/verify/verify_apk.py build/svz.apk \
+            --require-abi arm64-v8a --expect-package "$PACKAGE" --min-version-code "$version_code" \
+            --forbid-permission android.permission.INTERNET --expect-cert-sha256 "$CERT_SHA256" \
+            --check-bridge --apksigner "$apksigner" --json build/verify.json
+
+      - name: Build manifest
+        if: steps.engine.outputs.skip != 'true'
+        working-directory: engine
+        env:
+          ORIGINAL_SHA256: ${{ vars.SVZ_ORIGINAL_SHA256 }}
+          ENGINE_SHA: ${{ steps.engine.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          out="SvZ-Enhanced-${version_code}-${{ steps.engine.outputs.short }}.apk"
+          mv build/svz.apk "build/$out"
+          echo "apk=$out" >> "$GITHUB_ENV"
+          python3 -I - <<'PY'
+          import hashlib, json, os, re
+          apk = os.path.join("build", os.environ["apk"])
+          lock = json.load(open("flake.lock"))
+          csproj = open("godot/SvZPort.csproj").read()
+          manifest = {
+              "engine_repo": os.environ["ENGINE_REPO"], "engine_ref": os.environ["ENGINE_REF"],
+              "engine_commit": os.environ["ENGINE_SHA"],
+              "original_apk_sha256": os.environ["ORIGINAL_SHA256"],
+              "godot_sdk": re.search(r'Godot\.NET\.Sdk/([\d.]+)', csproj).group(1),
+              "nixpkgs_rev": lock["nodes"]["nixpkgs"]["locked"]["rev"],
+              "package": os.environ["PACKAGE"], "version_code": int(os.environ["version_code"]),
+              "apk": os.environ["apk"], "apk_sha256": hashlib.sha256(open(apk, "rb").read()).hexdigest(),
+              "run": os.environ["RUN_URL"],
+          }
+          json.dump(manifest, open("build/manifest.json", "w"), indent=2)
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Publish to this private repository
+        if: steps.engine.outputs.skip != 'true'
+        working-directory: engine
+        run: |
+          tag="apk-r${{ github.run_number }}-${{ steps.engine.outputs.short }}"
+          {
+            echo "Private build of \`$ENGINE_REPO@${{ steps.engine.outputs.short }}\` ($ENGINE_REF), versionCode $version_code."
+            echo
+            echo "Install over the previous build (keeps the save game): \`adb install -r $apk\`, or open the APK on the phone."
+            echo
+            echo "Verification:"
+            python3 -I -c "import json; [print(f\"- {'PASS' if r['passed'] else 'FAIL'} {r['check']}: {r['detail']}\") for r in json.load(open('build/verify.json'))['results']]"
+            echo
+            echo "Not verified by CI: running on a phone and 120 FPS (use tools/verify/device_check.py)."
+          } > build/notes.md
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "SvZ Enhanced $version_code (${{ steps.engine.outputs.short }})" --notes-file build/notes.md \
+            "build/$apk" build/manifest.json build/verify.json
+          echo "Published $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the newest builds only
+        if: steps.engine.outputs.skip != 'true'
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | tail -n +$(( KEEP_BUILDS + 1 )) | while read -r t; do
+                echo "removing old build $t"
+                gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done
+
+      - name: Failure logs (passwords removed)
+        if: failure() && steps.engine.outputs.skip != 'true'
+        env:
+          SVZ_KEYSTORE_PASSWORD: ${{ secrets.SVZ_KEYSTORE_PASSWORD }}
+        run: |
+          mkdir -p logs
+          for f in engine/build/*.log; do
+            [ -f "$f" ] || continue
+            python3 -I -c "import os,sys; p=os.environ['SVZ_KEYSTORE_PASSWORD']; t=open(sys.argv[1],errors='replace').read(); open(sys.argv[2],'w').write(t.replace(p,'***') if p else t)" "$f" "logs/$(basename "$f")"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure() && steps.engine.outputs.skip != 'true'
+        with:
+          name: build-logs
+          path: logs/
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Remove key and original files from the runner
+        if: always()
+        run: rm -rf engine/keys engine/original engine/work

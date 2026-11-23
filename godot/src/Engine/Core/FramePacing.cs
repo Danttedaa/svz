@@ -38,6 +38,7 @@ namespace Svz
 		private static int sGameRequested = int.MinValue;
 		private static Label sOverlay;
 		private static double sOverlayTimer;
+		private static readonly FrameStats sStats = new FrameStats();
 
 		public static void Init(Node root, Action<string> notify)
 		{
@@ -95,6 +96,7 @@ namespace Svz
 			}
 			if (sRecheckIn > 0 && (sRecheckIn -= delta) <= 0) Recheck("after request");
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
+			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
 			UpdateOverlay(delta);
 		}
 

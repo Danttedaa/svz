@@ -8,6 +8,9 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
+echo "== build and verification tool tests (Python)"
+python3 -m unittest discover -s "$here/tools" -t "$here/tools" < /dev/null
+
 echo "== policy tests"
 dotnet run --project "$here/FramePacing.Tests"
 
@@ -32,7 +35,14 @@ export NUGET_PACKAGES="${NUGET_PACKAGES:-$rt/.nuget}"
 dotnet build "$rt/FramePacingRuntimeTest.csproj" -nologo -v quiet
 # --import once so Godot registers the C# script class, then run the test scene
 "$godot_bin" --headless --path "$rt" --import >/dev/null 2>&1 || true
-"$godot_bin" --headless --path "$rt"
+out=$("$godot_bin" --headless --path "$rt" 2>&1) || { echo "$out"; exit 1; }
+echo "$out"
+# the 25 s of simulated frames must have produced the logcat stats line read by tools/verify/device_check.py
+grep -q '^\[svz-fps\] stats fps=[0-9.]* p95=[0-9.]*ms max=[0-9.]*ms missed=[0-9.]*% display=-\?[0-9]*Hz target=[0-9]*$' <<<"$out" \
+  || { echo "FAIL: no [svz-fps] stats line in the Godot output"; exit 1; }
+echo "stats line present: $(grep -m1 '\[svz-fps\] stats' <<<"$out")"
+grep '\[svz-fps\] stats' <<<"$out" | python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import device_check as d; \
+  s, _ = d.parse_game_log(sys.stdin.read()); assert s and s[0]['target'] == 120, s; print('device_check parses it:', s[0])" "$here/../tools/verify"
 
 echo "== Android refresh-rate bridge against stand-in Java objects"
 "$godot_bin" --headless --path "$rt" -- --phase=bridge

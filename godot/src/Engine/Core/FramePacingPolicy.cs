@@ -22,6 +22,8 @@ namespace Svz
 		public bool RequestDisplayRate = true;
 		/// Surface.setFrameRate change strategy: false = only if seamless (no blank flash), true = always.
 		public bool AllowNonSeamlessSwitch;
+		/// One "[svz-fps] stats ..." logcat line every 5 s (read by tools/verify/device_check.py).
+		public bool LogStats = true;
 
 		/// The fallback only applies while it is lower than the target. Derived on purpose: the stored
 		/// auto_fallback choice must survive a period at 60 FPS (it used to be switched off and saved).
@@ -44,6 +46,7 @@ namespace Svz
 			if (v.TryGetValue("show_fps", out var sf)) s.ShowFps = ParseBool(sf, s.ShowFps);
 			if (v.TryGetValue("request_display_rate", out var r)) s.RequestDisplayRate = ParseBool(r, s.RequestDisplayRate);
 			if (v.TryGetValue("allow_non_seamless_switch", out var n)) s.AllowNonSeamlessSwitch = ParseBool(n, s.AllowNonSeamlessSwitch);
+			if (v.TryGetValue("log_stats", out var ls)) s.LogStats = ParseBool(ls, s.LogStats);
 			return s;
 		}
 
@@ -55,6 +58,7 @@ namespace Svz
 			["show_fps"] = ShowFps ? "true" : "false",
 			["request_display_rate"] = RequestDisplayRate ? "true" : "false",
 			["allow_non_seamless_switch"] = AllowNonSeamlessSwitch ? "true" : "false",
+			["log_stats"] = LogStats ? "true" : "false",
 		};
 
 		private static bool ParseBool(string s, bool def)
@@ -170,6 +174,43 @@ namespace Svz
 			mWindowTime = 0; mFrames = 0; mMissed = 0;
 			if (mSlowWindows >= SlowWindowsToFallback) { Triggered = true; return true; }
 			return false;
+		}
+	}
+
+	/// Frame-time statistics over fixed windows, logged for on-device verification
+	/// (tools/verify/device_check.py parses the line). Frames > HitchSeconds (loading) are skipped.
+	public sealed class FrameStats
+	{
+		public double WindowSeconds = 5.0;
+		public double HitchSeconds = 0.25;
+		private readonly List<double> mFrames = new List<double>(1024);
+		private double mTime;
+		public string Last { get; private set; } = "";
+
+		/// Returns true when a window completed; its summary is in Last.
+		public bool Add(double dt, int targetFps, double displayHz)
+		{
+			if (dt <= 0 || dt > HitchSeconds) return false;
+			mFrames.Add(dt);
+			mTime += dt;
+			if (mTime < WindowSeconds) return false;
+			Last = Summarize(mFrames, mTime, targetFps, displayHz);
+			mFrames.Clear();
+			mTime = 0;
+			return true;
+		}
+
+		public static string Summarize(List<double> frames, double seconds, int targetFps, double displayHz)
+		{
+			var sorted = new List<double>(frames);
+			sorted.Sort();
+			double p95 = sorted[Math.Min(sorted.Count - 1, (int)Math.Ceiling(sorted.Count * 0.95) - 1)];
+			double max = sorted[sorted.Count - 1];
+			int missed = 0;
+			foreach (double f in frames) if (f > 1.5 / Math.Max(1, targetFps)) missed++;
+			return string.Format(CultureInfo.InvariantCulture,
+				"stats fps={0:0.0} p95={1:0.0}ms max={2:0.0}ms missed={3:0.0}% display={4:0}Hz target={5}",
+				frames.Count / seconds, p95 * 1000, max * 1000, 100.0 * missed / frames.Count, displayHz, targetFps);
 		}
 	}
 

@@ -48,6 +48,7 @@ File: `user://svz_enhanced.cfg` (created with defaults on first start), section 
 | `show_fps` | `false` | FPS / frame time / display Hz readout, top left |
 | `request_display_rate` | `true` | call `Surface.setFrameRate` on Android |
 | `allow_non_seamless_switch` | `false` | allow refresh-rate switches that may blank the screen briefly |
+| `log_stats` | `true` | one `[svz-fps] stats fps=... p95=... missed=...` logcat line every 5 s |
 
 In game, with no menu changes:
 
@@ -67,12 +68,18 @@ Logs: `adb logcat -s godot | grep svz-fps`.
 
 | check | result | where |
 |---|---|---|
-| Policy unit tests (33) | pass | `tests/run_tests.sh`, .NET 8, Linux x86_64 |
-| `FramePacing.cs` compiles against GodotSharp 4.7.2 and runs in the Godot 4.7.2 runtime: settings file, gestures, fallback, `Engine.MaxFps` really limits the frame rate (17 checks) | pass | headless Godot 4.7.2 .NET, Linux x86_64 |
-| Full port (`Main.cs`, `AppImpl.cs` with game sources) compiles | **not verified** | needs the decompiled game sources from your APK |
-| `Surface.setFrameRate` call reaches the render surface through the AndroidRuntime bridge | **not verified** | needs an Android device; code follows Godot 4.7.2's Java API (`GodotActivity.getGodot`, `Godot.getRenderView`, `GodotRenderView.getView`) with a view-tree search as a second path |
-| 120 FPS on the S25 Ultra | **not verified** | needs a device build and test |
-| Gameplay timing identical at 60 and 120 FPS | **not verified on device**; static audit of the reconstructed SvZ1 scripts found no frame-count-dependent gameplay logic | `tools/dev/frame_audit.py` |
+| Diff applies cleanly to upstream `f00a75c` | pass | `git am` on the fork's `main`; identical diff, `git diff --check` clean |
+| Policy unit tests (38) | pass | `tests/run_tests.sh`, .NET 8, Linux x86_64 |
+| `FramePacing.cs` compiled against GodotSharp 4.7.2 and run in the Godot 4.7.2 runtime (17 checks: settings file, gestures, fallback, `Engine.MaxFps` really limits the frame rate) | pass | headless Godot 4.7.2 .NET, Linux x86_64 |
+| Settings survive an app restart (three separate processes, 11 checks) | pass | same; found and fixed a bug: `auto_fallback` was saved as off after a period at 60 FPS |
+| Refresh-rate bridge call chain against stand-in Java objects (9 checks: both paths, API 30 and 31+ overloads, strategy flag, missing hops) | pass | same |
+| Bridge methods exist, public and un-minified, in the official Godot 4.7.2 Android template; `GodotApp` extends `GodotActivity`; JavaClassWrapper resolves by runtime class and superclasses | pass | DEX inspection of `android_release.apk`, Godot 4.7.2 sources |
+| `Surface` constants and overloads (`CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS` = 0, `ALWAYS` = 1; 3-arg API 31, 2-arg API 30) | checked | Android API reference |
+| Build/verify tools and workflow guards (31 Python tests) | pass | `tests/tools` |
+| Full port compile with game sources, APK export | **not verified** | needs the original APK: runs in the private pipeline |
+| `Surface.setFrameRate` on a real device, 120 FPS on the S25 Ultra | **not verified** | `tools/verify/device_check.py` on the phone |
+
+No emulator was used: the cloud session had no KVM and no access to the Android SDK download servers.
 
 ### Known limitations
 
@@ -89,3 +96,25 @@ Logs: `adb logcat -s godot | grep svz-fps`.
    `display after request: 120Hz -> maxFps=0 ... vsyncPaced=True`.
 3. Hold 5 fingers for 1.5 s to show the FPS readout; play a level; hold 4 fingers to compare 60 FPS.
 4. Developer options > Show refresh rate confirms the panel rate independently.
+
+## Milestone 2: private build pipeline (installable APKs without re-supplying the game)
+
+See [`ci/private/README.md`](ci/private/README.md). Summary:
+
+- The original APK is uploaded once to a **private** repository (release `original`, SHA-256 pinned).
+- `ci/private/build-apk.yml` (installed there by `tools/private_build_setup.sh`) checks out an engine
+  commit of this repository, builds with the pinned Nix toolchain, signs with your key (refusing any other
+  key), verifies the APK and publishes it as a release of the private repository.
+- Rebuilds: manual, daily when the engine has a new commit, or on push via the optional notifier.
+- This public repository publishes nothing: `build.yml` lost its release steps and refuses to run in a
+  public repository; `tests/tools/test_workflows.py` keeps it that way.
+
+New tools:
+
+| file | purpose |
+|---|---|
+| `tools/private_build_setup.sh` | one-time setup of the private repository (run on your computer) |
+| `tools/set_android_preset.py` | package id, app name, versionCode, versionName for one build (`tools/build.sh --package ...`) |
+| `tools/verify/verify_apk.py` | arm64-v8a, no INTERNET permission, package, versionCode, signer, bridge methods, apksigner |
+| `tools/verify/cert_fingerprint.py` | signing certificate fingerprint check (`SVZ_EXPECT_CERT_SHA256` in `tools/build.sh`) |
+| `tools/verify/device_check.py` | on the phone: SurfaceFlinger present timestamps + `[svz-fps]` stats -> PASS/FAIL at 120 FPS |

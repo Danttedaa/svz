@@ -9,6 +9,17 @@
 #   --debug        debug export (default: release, signed with keys/svz.jks)
 #   --platform P   android (default) | windows | linux | linux-arm64 | macos | all (comma separated works too)
 #   --install      install on the phone with adb afterwards (android)
+#   --package ID        Android package id (default: the preset's, com.mesflit.svz)
+#   --app-name NAME     launcher name
+#   --version-code N    Android versionCode; must grow with every update you install over a previous build
+#   --version-name S    shown in Android's app info
+#
+# Signing (release): the Nix shell points Godot at keys/svz.jks (password "android") and creates that key
+# if it is missing. These environment variables override it (CI uses them):
+#   SVZ_KEYSTORE, SVZ_KEYSTORE_ALIAS, SVZ_KEYSTORE_PASSWORD
+#   SVZ_EXPECT_CERT_SHA256   refuse to sign unless the key's certificate has this SHA-256 fingerprint
+#                            (protects against silently signing with a new key: Android would then refuse
+#                            to update the installed app, and reinstalling deletes the save game)
 #
 # Output: build/svz.apk, build/svz-windows.zip, build/svz-linux-x86_64.zip, build/svz-linux-arm64.zip, build/svz-macos.zip
 set -euo pipefail
@@ -17,6 +28,7 @@ cd "$root"
 
 apk="$root/original/svz.apk"; obb=""
 reexport=0; mode=release; install=0; platforms=android
+pkg=""; app_name=""; version_code=""; version_name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apk) apk="$2"; shift;;
@@ -25,7 +37,11 @@ while [ $# -gt 0 ]; do
     --debug) mode=debug;;
     --install) install=1;;
     --platform) platforms="$2"; shift;;
-    -h|--help) sed -n 2,16p "$0"; exit 0;;
+    --package) pkg="$2"; shift;;
+    --app-name) app_name="$2"; shift;;
+    --version-code) version_code="$2"; shift;;
+    --version-name) version_name="$2"; shift;;
+    -h|--help) sed -n 2,28p "$0"; exit 0;;
     *) echo "unknown option $1" >&2; exit 1;;
   esac; shift
 done
@@ -74,6 +90,33 @@ step "4/5 importing assets and compiling C#"
 
 [ "$platforms" = all ] && platforms=android,windows,linux,linux-arm64,macos
 mkdir -p build
+
+# Android identity/version for this build only: the preset file is restored afterwards.
+presets="$root/godot/export_presets.cfg"
+if [ -n "$pkg$app_name$version_code$version_name" ]; then
+  cp "$presets" "$presets.orig"
+  trap 'mv -f "$presets.orig" "$presets"' EXIT
+  args=()
+  [ -z "$pkg" ] || args+=(--package "$pkg")
+  [ -z "$app_name" ] || args+=(--app-name "$app_name")
+  [ -z "$version_code" ] || args+=(--version-code "$version_code")
+  [ -z "$version_name" ] || args+=(--version-name "$version_name")
+  python3 -I tools/set_android_preset.py "$presets" "${args[@]}"
+fi
+
+# Release signing key: explicit settings win over the Nix shell defaults.
+if [ -n "${SVZ_KEYSTORE:-}" ]; then export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$SVZ_KEYSTORE"; fi
+if [ -n "${SVZ_KEYSTORE_ALIAS:-}" ]; then export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$SVZ_KEYSTORE_ALIAS"; fi
+if [ -n "${SVZ_KEYSTORE_PASSWORD:-}" ]; then export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$SVZ_KEYSTORE_PASSWORD"; fi
+if [ -n "${SVZ_EXPECT_CERT_SHA256:-}" ] && [ $mode = release ] && [[ ",$platforms," == *",android,"* ]]; then
+  ks="${GODOT_ANDROID_KEYSTORE_RELEASE_PATH:-}"
+  [ -f "$ks" ] || { echo "signing key not found: $ks" >&2; exit 1; }
+  got=$(keytool -list -v -keystore "$ks" -storepass:env GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD \
+          -alias "$GODOT_ANDROID_KEYSTORE_RELEASE_USER" 2>/dev/null | python3 -I tools/verify/cert_fingerprint.py)
+  want=$(printf '%s' "$SVZ_EXPECT_CERT_SHA256" | python3 -I tools/verify/cert_fingerprint.py --normalize)
+  [ -n "$got" ] && [ "$got" = "$want" ] || { echo "signing key fingerprint ${got:-unreadable} != expected $want: refusing to sign" >&2; exit 1; }
+  echo "signing key fingerprint OK ($got)"
+fi
 for p in ${platforms//,/ }; do
   case "$p" in
     android) preset=Android; out=build/svz.apk;;

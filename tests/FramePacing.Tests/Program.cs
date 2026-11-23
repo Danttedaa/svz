@@ -24,6 +24,7 @@ internal static class Program
 		Monitor();
 		Gesture();
 		ApiLevels();
+		Stats();
 		Console.WriteLine($"{sPassed} passed, {sFailed} failed");
 		return sFailed == 0 ? 0 : 1;
 	}
@@ -147,6 +148,17 @@ internal static class Program
 		g.Update(0, 1.0 / 60);
 		for (int i = 0; i < 100; i++) if (g.Update(4, 1.0 / 60)) fires++;
 		Check(fires == 2, "re-arms after release");
+	}
+
+	private static void Stats()
+	{
+		var st = new FrameStats();
+		bool done = false;
+		for (int i = 0; i < 600 && !done; i++) done = st.Add(i % 100 == 0 ? 2.0 / 120 : 1.0 / 120, 120, 120);
+		Check(done, "stats window completes after 5 s");
+		// must match the regex in tools/verify/device_check.py (tests/tools/test_tools.py uses this exact line)
+		Check(st.Last == "stats fps=118.8 p95=8.3ms max=16.7ms missed=1.0% display=120Hz target=120", "stats line format: " + st.Last);
+		Check(!st.Add(1.0, 120, 120), "loading hitch ignored");
 	}
 
 	private static void ApiLevels()

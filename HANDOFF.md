@@ -1,7 +1,51 @@
-# SvZ Enhanced: handoff (2026-11-23, 16:00 EET)
+# SvZ Enhanced: handoff (2026-11-23, evening)
 
-For whoever continues this work (human or another AI assistant). Everything needed is in this repository;
-nothing important exists only in a workspace. Game files and signing keys are **never** committed here.
+For whoever continues this work (human or another AI assistant). Game files, decompiled game code, game
+screenshots and signing keys are **never** committed to this public repository.
+
+## Current state
+
+| item | state |
+|---|---|
+| last build tested on the phone (S25 Ultra) | **v1003** (`apk-r3-45d610042402`, engine `45d6100`): 120 FPS with power saving off, ~1 s victory, rewards OK |
+| v1004–v1008 | built + emulator smoke only; **v1006/v1008 contain the M7 font regression** (text 2x, Store dialog overflows) |
+| this branch (`claude/svz-enhanced-resume-czy9ax`) | M1–M8 + M9 (frozen-zombie root cause), M10 (readable text), M11 (GC hitches), pipeline updates |
+| private repo `Danttedaa/svz-private` | builds from `engine_ref` in `svz-build.json`; `keep_tags` protects v1003; manual runs accept an `engine_ref` (rollback) |
+
+What changed and why, with measurements: `ENHANCED.md` (sections "Audit of M3–M8", M9, M10, M11).
+
+## How the port was tested without a phone (repeatable, not committed)
+
+The pinned port APK runs on Linux: unzip its `assets/` into a folder (it is a Godot project:
+`project.binary`, `.godot/`, `data/`), put the x86_64 `SvZPort.dll` (patched or not) into
+`.godot/mono/temp/bin/Debug/`, and start the official Godot 4.7.2 .NET editor binary with
+`--headless --path <folder> -- --level=2` (2 = InGame, 3 = Store, 1 = MainMenu). It needs a .NET 9 runtime
+(`DOTNET_ROOT` to a folder with `host/fxr` + `shared/Microsoft.NETCore.App/9.x` from the NuGet package
+`microsoft.netcore.app.runtime.linux-x64`, and `DOTNET_ROLL_FORWARD=LatestMajor`). Screenshots: the same with
+`xvfb-run`, `--rendering-driver opengl3 --resolution 2340x1080 -- --level=3 --shots=8` (Mesa llvmpipe).
+
+A local harness assembly (injected with Mono.Cecil at the end of `Main._Ready`, never shipped) skipped
+tutorials, kept the hero alive, killed enemies with chosen attack types, reported corpses stuck in
+`CharactersManager.mDyingCharacters`, and measured CPU/allocations per subsystem. Benchmarks on the cloud VM
+drift up to 2x between runs: compare builds only with interleaved A/B runs, using process CPU time per frame.
+
+Known, pre-existing (also in the unmodified port): occasional caught `NullReferenceException` in the
+animation events `SpawnEffectPrefab` / `HideBodyPart` during forced kills; harmless, not investigated.
+
+## Next steps
+
+1. Phone: install the newest private build (after its emulator smoke passed), check Store/Allies text,
+   explosions (no frozen zombies; `[svz-death]` lines in logcat would mean an unknown remaining case),
+   victory timing incl. rewards, and the FPS readout in a crowded wave (hold 5 fingers).
+2. If anything is wrong: rebuild v1003 via Actions → Run workflow → `engine_ref` = `45d610042402d52527cbfbd1d28a71bfdd64dceb`
+   (installs over newer builds and keeps the save; never reinstall an old APK file).
+3. Remaining crowded-wave cost is Godot-native skinning (`Skeleton3D` bone poses) and particle mesh rebuilds;
+   GodotSharp still tracks ~120k interop objects from other sources between collections (find them next).
+
+---
+
+# Earlier handoff (2026-11-23, 16:00 EET), kept for history
+
 
 ## Goal and priority
 

@@ -125,8 +125,10 @@ namespace Svz
 	///
 	/// A frame is "missed" when it took longer than 1.5 target frame intervals (i.e. at least one
 	/// VSync was skipped). After a startup grace period, frames are grouped into windows; a window is
-	/// "slow" when more than `MissRatio` of its frames were missed or its average rate is below
-	/// `MinRateRatio` of the target. `SlowWindowsToFallback` consecutive slow windows trigger the
+	/// "slow" when more than `MissRatio` of its frames were missed or its average rate is severely
+	/// below `MinRateRatio` of the target. Moderate 80-95 FPS combat on a 120 Hz screen should
+	/// remain uncapped instead of immediately becoming a forced 60 FPS mode.
+	/// `SlowWindowsToFallback` consecutive slow windows trigger the
 	/// fallback. A long frame (> HitchSeconds: level load, app switch) restarts the grace period, so
 	/// loading never counts against the target. Device temperature is not read.
 	public sealed class FallbackMonitor
@@ -134,7 +136,10 @@ namespace Svz
 		public double StartupGraceSeconds = 10.0;
 		public double WindowSeconds = 5.0;
 		public double MissRatio = 0.20;
-		public double MinRateRatio = 0.80;
+		// Hard fallback should be a last resort: at ~86 FPS with ~1% long frames the
+		// old 0.80 threshold (96 FPS) unnecessarily forced a 60 FPS lock.
+		// >=20% long frames remains an independent safety fallback trigger.
+		public double MinRateRatio = 0.60;
 		public int SlowWindowsToFallback = 2;
 		public double HitchSeconds = 0.25;
 

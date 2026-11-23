@@ -85,22 +85,26 @@ static class Program
 		var verts = Field("__v");
 		var uvs = Field("__uv");
 		var colors = Field("__c");
+		int[] Indices() => ((System.Collections.Generic.List<int[]>)meshT.GetField("__subs", F).GetValue(mesh))[0];
+		var indices = Indices();
+		Check(indices.Length == 18, "particle triangle mesh has six indices per particle");
 		Check(verts.Length == 12 && uvs.Length == 12 && colors.Length == 12,
 			"particle mesh generates all four corners for each particle");
 		Check(ReferenceEquals(mesh, Build(renderer)) &&
 			ReferenceEquals(verts, Field("__v")) &&
 			ReferenceEquals(uvs, Field("__uv")) &&
-			ReferenceEquals(colors, Field("__c")),
-			"same-sized frames reuse all three previous renderer-owned arrays");
+			ReferenceEquals(colors, Field("__c")) && ReferenceEquals(indices, Indices()),
+			"same-sized frames reuse all four previous renderer-owned arrays");
 		countProp.SetValue(renderer, 5);
 		Build(renderer);
-		Check(Field("__v").Length == 20 &&
-			!ReferenceEquals(verts, Field("__v")),
-			"particle count growth reallocates safely to the correct size");
+		Check(Field("__v").Length == 20 && Indices().Length == 30 &&
+			!ReferenceEquals(verts, Field("__v")) && !ReferenceEquals(indices, Indices()),
+			"particle count growth resizes vertex and triangle-index arrays safely");
 		countProp.SetValue(renderer, 0);
 		Build(renderer);
-		Check(Field("__v").Length == 0 && Field("__uv").Length == 0 && Field("__c").Length == 0,
-			"particle death clears previous mesh vertices and colors");
+		Check(Field("__v").Length == 0 && Field("__uv").Length == 0 &&
+			Field("__c").Length == 0 && Indices().Length == 0,
+			"particle death clears previous mesh vertices, colors, and triangle indices");
 		var secondRenderer = NewRenderer(3);
 		var secondMesh = Build(secondRenderer);
 		Check(!ReferenceEquals(mesh, secondMesh) &&

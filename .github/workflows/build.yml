@@ -1,5 +1,10 @@
 # Builds SvZ for Android, Windows, Linux and macOS.
 #
+# SvZ Enhanced: the APKs and archives built here contain the original game, so this workflow
+# refuses to run in a public repository and never publishes releases. For the enhanced Android
+# build use the private pipeline instead: ci/private/build-apk.yml (see ci/private/README.md).
+# Artifacts are kept for 3 days and are visible only to people with access to the private repository.
+#
 # Needs repository secrets (Settings > Secrets and variables > Actions):
 #   SVZ_APK_URL       link to your original Samurai vs Zombies Defense 3.4.0 APK (a direct link, or a
 #                     Google Drive share link of a file shared with "anyone with the link")
@@ -14,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read             # no releases: nothing is published from this workflow
 
 concurrency:
   group: build-${{ github.ref }}
@@ -25,6 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      - name: Refuse to run in a public repository
+        if: ${{ github.event.repository.private != true }}
+        run: |
+          echo "::error::This build embeds the original game; it only runs in private repositories (see ci/private/README.md)."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - name: Free disk space
@@ -49,6 +60,7 @@ jobs:
           # Google Drive share links -> direct download (confirm=t skips the large-file warning page)
           id=$(printf '%s' "$url" | sed -nE 's#.*drive\.google\.com/(file/d/|open\?id=|uc\?(export=download&)?id=)([A-Za-z0-9_-]+).*#\3#p')
           if [ -n "$id" ]; then url="https://drive.usercontent.google.com/download?id=$id&export=download&confirm=t"; fi
+          echo "::add-mask::$url"   # the derived link is not a secret itself, so mask it explicitly
           mkdir -p original
           curl -fsSL --retry 3 -o original/svz.apk "$url"
           unzip -tq original/svz.apk > /dev/null || { echo "::error::SVZ_APK_URL did not return a valid APK (is it a direct download link?)"; exit 1; }
@@ -66,48 +78,32 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 3
           name: svz-android-arm64
           path: build/svz.apk
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 3
           name: svz-windows-x86_64
           path: build/svz-windows.zip
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 3
           name: svz-linux-x86_64
           path: build/svz-linux-x86_64.zip
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 3
           name: svz-linux-arm64
           path: build/svz-linux-arm64.zip
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 3
           name: svz-macos
           path: build/svz-macos.zip
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
+          retention-days: 3
           name: export-logs
           path: build/*.log
-
-      - name: Release "latest" (every push to main)
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest --target "$GITHUB_SHA" --prerelease \
-            --title "Latest build ($(git rev-parse --short HEAD))" \
-            --notes "Automatic build of $(git rev-parse --short HEAD). Android: svz.apk (arm64 + x86_64). Desktop: unzip and run." \
-            build/svz.apk build/svz-windows.zip build/svz-linux-x86_64.zip build/svz-linux-arm64.zip build/svz-macos.zip
-
-      - name: Release (version tags)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            build/svz.apk
-            build/svz-windows.zip
-            build/svz-linux-x86_64.zip
-            build/svz-linux-arm64.zip
-            build/svz-macos.zip

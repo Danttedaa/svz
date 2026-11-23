@@ -53,6 +53,9 @@ jobs:
           exit 1
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # a release upload triggers the run on the release's tag (detached HEAD): pins must be pushed to the branch
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Configuration
         id: cfg

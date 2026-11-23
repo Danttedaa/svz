@@ -126,6 +126,13 @@ class PrivateWorkflow(unittest.TestCase):
         self.assertIn("a new key would break updates", self.text)
         self.assertNotIn("upload-artifact", self.text)  # nothing from a private build leaves as an artifact
 
+    def test_checks_out_default_branch(self):
+        """Runs started by the release upload must still be able to push the key/original pins."""
+        if yaml is None:
+            self.skipTest("PyYAML not installed")
+        first = next(st for st in steps(yaml.safe_load(self.text)) if "uses" in st)
+        self.assertEqual(first["with"]["ref"], "${{ github.event.repository.default_branch }}")
+
     def test_no_user_site_installs(self):
         """`pip install --user` + `python -I` silently loses the package (isolated mode ignores user site)."""
         for wf in PUBLIC_WORKFLOWS + [PRIVATE_WORKFLOW]:

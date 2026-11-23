@@ -663,7 +663,8 @@ internal static class Program
 		var canvas = GuiCanvas(module);
 		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
 		var glyph = drawText.Body.Instructions.FirstOrDefault(i => Calls(i, "Svz.UiText", "DrawGlyph"));
-		Require(glyph?.Operand is MethodReference glyphCall && glyphCall.Parameters.Count == 7,
+		var glyphCall = glyph?.Operand as MethodReference;
+		Require(glyphCall != null && glyphCall.Parameters.Count == 7,
 			"DrawText is already patched to UiText.DrawGlyph");
 		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0).Body;
 		draw.SimplifyMacros();

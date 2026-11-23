@@ -116,3 +116,18 @@ repository; `tests/tools/test_workflows.py` keeps it that way.
 | `tools/verify/cert_fingerprint.py` | signing certificate check (`SVZ_EXPECT_CERT_SHA256` in `tools/build.sh`) |
 | `tools/verify/device_check.py` | on a PC with adb: SurfaceFlinger present timestamps + `[svz-fps]` stats -> PASS/FAIL at 120 FPS |
 | `tools/probe/` + `.github/workflows/probe-apk.yml` | 120 Hz probe app: the frame-pacing code on a phone, no game files |
+
+## Milestone 3: faster normal victory transitions (in verification)
+
+- Patch the compiler-generated `InGameImpl.PostWinDelay` coroutine's single
+  `WaitForSeconds` duration from the legacy configured ~7 game-seconds to **1.0 game-second**.
+- The original `RegisterWin()` (rewards/profile save) and `onFinishGameRequest()`
+  calls are preserved, in order, by a fail-closed Mono.Cecil patcher that checks
+  the shape of the iterator before modifying it. The original compiled game
+  and its private assets are not committed to this public repository.
+- This is **not yet a real-device-verified feature**. A final-wave ending
+  could be shortened; validate endings and standard wins before merging.
+  Tap-to-skip and shorter screen loading are separate later changes.
+- The fake-port test includes a synthetic iterator to catch changes to the
+  expected IL contract. The first private APK must verify the real iterator
+  has the same pattern.

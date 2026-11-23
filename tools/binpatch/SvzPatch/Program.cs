@@ -183,9 +183,77 @@ internal static class Program
 			si.Append(si.Create(OpCodes.Ret));
 		}
 
+		// Shorten only the regular win coroutine's wait. Reward registration and the exit
+		// handler are left in their original order; abort if the compiled game's shape changed.
+		PatchWinDelay(module);
+
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
 		if (!Check(output)) throw new PatchException("patched file does not pass the check");
+	}
+
+
+	private const float FastWinDelaySeconds = 1.0f;
+
+	private static IEnumerable<TypeDefinition> Descendants(IEnumerable<TypeDefinition> types)
+	{
+		foreach (var t in types)
+		{
+			yield return t;
+			foreach (var nested in Descendants(t.NestedTypes)) yield return nested;
+		}
+	}
+
+	private static bool IsWinWait(Instruction i) =>
+		i.OpCode == OpCodes.Newobj && i.Operand is MethodReference m &&
+		m.DeclaringType.FullName == "UnityEngine.WaitForSeconds" && m.Name == ".ctor" &&
+		m.Parameters.Count == 1 && m.Parameters[0].ParameterType.FullName == "System.Single";
+
+	private static MethodDefinition WinMoveNext(ModuleDefinition module)
+	{
+		var matches = Descendants(module.Types)
+			.Where(t => t.Name.Contains("PostWinDelay", StringComparison.Ordinal))
+			.SelectMany(t => t.Methods.Where(m => m.Name == "MoveNext" && m.HasBody))
+			.ToArray();
+		return matches.Length == 1 ? matches[0] : null;
+	}
+
+	private static bool WinDelayPatched(ModuleDefinition module)
+	{
+		var move = WinMoveNext(module);
+		if (move == null) return false;
+		var waits = move.Body.Instructions.Where(IsWinWait).ToArray();
+		if (waits.Length != 1) return false;
+		var before = waits[0].Previous;
+		return before != null && before.OpCode == OpCodes.Ldc_R4 &&
+			(float)before.Operand == FastWinDelaySeconds &&
+			before.Previous != null && before.Previous.OpCode == OpCodes.Pop;
+	}
+
+	private static void PatchWinDelay(ModuleDefinition module)
+	{
+		var move = WinMoveNext(module);
+		Require(move != null, "exactly one PostWinDelay iterator state machine");
+		var body = move.Body;
+		body.SimplifyMacros();
+
+		// The wait must be followed by the game's original reward/save and exit calls.
+		// We never bypass, duplicate or reorder those calls.
+		bool CallsGame(string name) => body.Instructions.Any(i =>
+			(i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
+			i.Operand is MethodReference m && m.Name == name &&
+			m.DeclaringType.Name == "InGameImpl");
+		Require(CallsGame("RegisterWin") && CallsGame("onFinishGameRequest"),
+			"PostWinDelay does not retain RegisterWin + onFinishGameRequest");
+		var waits = body.Instructions.Where(IsWinWait).ToArray();
+		Require(waits.Length == 1, "PostWinDelay must construct exactly one WaitForSeconds");
+		// The original float.Parse(config[postWinTime]) still runs; replace only the
+		// duration left on the evaluation stack immediately before constructing the wait.
+		var il = body.GetILProcessor();
+		il.InsertBefore(waits[0], il.Create(OpCodes.Pop));
+		il.InsertBefore(waits[0], il.Create(OpCodes.Ldc_R4, FastWinDelaySeconds));
+		body.OptimizeMacros();
+		Require(WinDelayPatched(module), "PostWinDelay wait was not patched");
 	}
 
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
@@ -223,6 +291,7 @@ internal static class Program
 			("Application.targetFrameRate getter", CallsEnh("UnityEngine.Application", "get_targetFrameRate", 0, "get_EffectiveFps")),
 			("Application.targetFrameRate setter", CallsEnh("UnityEngine.Application", "set_targetFrameRate", 1, "GameRequested")),
 			("assembly reference SvzEnhanced", m.AssemblyReferences.Any(a => a.Name == Enh)),
+			("PostWinDelay wait -> 1.0 seconds", WinDelayPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

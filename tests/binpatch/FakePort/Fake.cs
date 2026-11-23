@@ -6,6 +6,9 @@ namespace UnityEngine
 	public sealed class Time { internal static float __smoothDt = 1f / 30f, __dt; }
 	public struct Mathf { public static float Lerp(float a, float b, float t) => a + (b - a) * t; }
 	public sealed class Input { public static int touchCount => 0; }
+	// Stand-in for the legacy coroutine yield instruction; no proprietary game code.
+	public sealed class WaitForSeconds { public float Seconds { get; } public WaitForSeconds(float seconds) { Seconds = seconds; } }
+
 	public sealed class Application
 	{
 		public static int targetFrameRate { get => Godot.Engine.MaxFps; set => Godot.Engine.MaxFps = value <= 0 ? 60 : value; }
@@ -45,5 +48,26 @@ namespace Svz
 			Time.__dt = dt;
 			Time.__smoothDt = Mathf.Lerp(Time.__smoothDt, dt, 0.1f);
 		}
+	}
+}
+
+
+// Synthetic iterator with the same *control-flow contract* as the old game:
+// one configurable delay, then reward registration once, then finish once.
+namespace Svz
+{
+	public sealed class InGameImpl
+	{
+		public int Registered { get; private set; }
+		public int Finished { get; private set; }
+		private System.Collections.IEnumerator PostWinDelay()
+		{
+			float wait = float.Parse("7.0", System.Globalization.CultureInfo.InvariantCulture);
+			yield return new UnityEngine.WaitForSeconds(wait);
+			RegisterWin();
+			onFinishGameRequest();
+		}
+		private void RegisterWin() { Registered++; }
+		private void onFinishGameRequest() { Finished++; }
 	}
 }

@@ -14,20 +14,22 @@ namespace Svz
 	///
 	/// Size: see <see cref="UiFontQuality"/>. Hold 3 fingers for 2 s to switch between 100 % and 115 % (130 % clips the Store captions).
 	///
-	/// Settings: user://svz_ui.cfg, section [text]: scale (percent of the original text size, 80..150,
-	/// default 100) and outline_v2 (true/false, default false). Migrates old auto-enabled contrast to clean mode.
+	/// Settings: user://svz_ui.cfg, section [text]: scale (80..150%, default 100) and font_mode_v1.
+	/// Two-finger hold cycles solid-small-text, original and outlined modes; large headings remain original.
 	/// </summary>
 	public static class UiText
 	{
 		public const string ConfigPath = "user://svz_ui.cfg";
 		public static bool Contrast = false;
+		public static int FontMode = UiInkPolicy.Solid;
 		private static bool sHaloPass, sLoaded;
+		private static float sViewportHeight;
 		private static ulong sOffsetFrame = ulong.MaxValue;
 		private static float sOffset = 1f;
 		private static readonly HoldGesture sCycle = new HoldGesture(3, 2.0);
 		private static readonly HoldGesture sToggleOutline = new HoldGesture(2, 2.0);
 
-		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance; }
+		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance, Chroma; }
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
 
 		/// Narrow one-pixel outline at 1080p; avoid obscuring the thin legacy glyph interiors.
@@ -52,6 +54,28 @@ namespace Svz
 		{
 			if (!sHaloPass)
 			{
+				// Keep the original silhouette but remove noisy baked RGB details from
+				// small monochrome glyphs. Do not affect large art headings or colored text.
+				if (FontMode == UiInkPolicy.Solid)
+				{
+					if (sViewportHeight <= 0f) sViewportHeight = ViewHeight(self);
+					float height = Math.Abs(rect.Size.Y);
+					if (height >= 4f && height <= sViewportHeight * 0.052f)
+					{
+						var fillAtlas = sAtlases.GetValue(texture, MakeHaloAtlas);
+						var original = modulate ?? Colors.White;
+						int ink = UiInkPolicy.InkKind(height, sViewportHeight,
+							fillAtlas.Luminance, fillAtlas.Chroma, original.R, original.G,
+							original.B, original.A);
+						if (ink != 0 && fillAtlas.Texture != null)
+						{
+							float v = ink > 0 ? 0.055f : 0.96f;
+							self.DrawTextureRectRegion(fillAtlas.Texture, rect, srcRect,
+								new Color(v, v, v, original.A), transpose, clipUv);
+							return;
+						}
+					}
+				}
 				self.DrawTextureRectRegion(texture, rect, srcRect, modulate, transpose, clipUv);
 				return;
 			}
@@ -89,7 +113,7 @@ namespace Svz
 				byte[] rgba = img.GetData();
 				int px = rgba.Length / 4;
 				var la = new byte[px * 2];
-				double lumSum = 0, alphaSum = 0;
+				double lumSum = 0, alphaSum = 0, redSum = 0, greenSum = 0, blueSum = 0;
 				for (int i = 0; i < px; i++)
 				{
 					byte a = rgba[i * 4 + 3];
@@ -98,10 +122,20 @@ namespace Svz
 					if (a > 0)
 					{
 						lumSum += a * (0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2]) / 255.0;
+						redSum += a * rgba[i * 4] / 255.0;
+						greenSum += a * rgba[i * 4 + 1] / 255.0;
+						blueSum += a * rgba[i * 4 + 2] / 255.0;
 						alphaSum += a;
 					}
 				}
 				result.Luminance = alphaSum > 0 ? (float)(lumSum / alphaSum) : 1f;
+				if (alphaSum > 0)
+				{
+					float r = (float)(redSum / alphaSum);
+					float g = (float)(greenSum / alphaSum);
+					float b = (float)(blueSum / alphaSum);
+					result.Chroma = Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b));
+				}
 				var white = Image.CreateFromData(img.GetWidth(), img.GetHeight(), false, Image.Format.La8, la);
 				result.Texture = ImageTexture.CreateFromImage(white);
 			}
@@ -129,11 +163,17 @@ namespace Svz
 				int scale = exists && cf.HasSectionKey("text", "scale") ? cf.GetValue("text", "scale").AsInt32() : (int)Math.Round(UiFontQuality.DefaultTextScale * 100);
 				// v1012 wrote contrast=true on first run, without an in-game way to turn it off.
 				// Do not carry that implicit legacy default forward. A new key records explicit opt-in.
-				Contrast = exists && cf.HasSectionKey("text", "outline_v2") && cf.GetValue("text", "outline_v2").AsBool();
+				int previousMode = exists && cf.HasSectionKey("text", "outline_v2") && cf.GetValue("text", "outline_v2").AsBool()
+					? UiInkPolicy.Outlined : UiInkPolicy.Solid;
+				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v1")
+					? cf.GetValue("text", "font_mode_v1").AsInt32() : previousMode;
+				FontMode = requestedMode >= UiInkPolicy.Solid && requestedMode <= UiInkPolicy.Outlined
+					? requestedMode : UiInkPolicy.Solid;
+				Contrast = FontMode == UiInkPolicy.Outlined;
 				UiFontQuality.TextScale = Math.Clamp(scale, (int)(UiFontQuality.MinTextScale * 100), (int)(UiFontQuality.MaxTextScale * 100)) / 100f;
-				if (!exists || !cf.HasSectionKey("text", "outline_v2")) Save();
+				if (!exists || !cf.HasSectionKey("text", "font_mode_v1")) Save();
 				FramePacing.AfterFrame += OnFrame;
-				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, contrast {(Contrast ? "on" : "off")}");
+				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, mode {UiInkPolicy.ModeName(FontMode)}, contrast {(Contrast ? "on" : "off")}");
 			}
 			catch (Exception e)
 			{
@@ -147,6 +187,7 @@ namespace Svz
 			cf.SetValue("text", "scale", (int)Math.Round(UiFontQuality.TextScale * 100));
 			cf.SetValue("text", "contrast", Contrast); // compatibility if rolling back to v1012
 			cf.SetValue("text", "outline_v2", Contrast);
+			cf.SetValue("text", "font_mode_v1", FontMode);
 			cf.Save(ConfigPath);
 		}
 
@@ -155,10 +196,11 @@ namespace Svz
 			// A/B on the SAME phone/build isolates halo overdraw from HD glyph atlas issues.
 			if (sToggleOutline.Update(touchCount, delta))
 			{
-				Contrast = !Contrast;
+				FontMode = UiInkPolicy.NextMode(FontMode);
+				Contrast = FontMode == UiInkPolicy.Outlined;
 				Save();
-				FramePacing.Notify(Contrast ? "Text outline ON" : "Text outline OFF");
-				GD.Print($"[svz-ui] text outline {(Contrast ? "on" : "off")}");
+				FramePacing.Notify($"Text: {UiInkPolicy.ModeName(FontMode)}");
+				GD.Print($"[svz-ui] text mode {UiInkPolicy.ModeName(FontMode)}");
 			}
 			if (!sCycle.Update(touchCount, delta)) return;
 			int next = UiFontQuality.NextScaleStep((int)Math.Round(UiFontQuality.TextScale * 100));

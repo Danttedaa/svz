@@ -75,7 +75,10 @@ internal static class Program
 		s = FrameSettings.FromValues(new Dictionary<string, string> { ["target_fps"] = "144", ["fallback_fps"] = "abc" });
 		Check(s.TargetFps == 120 && s.FallbackFps == 60, "invalid values keep defaults");
 		s = FrameSettings.FromValues(new Dictionary<string, string> { ["target_fps"] = "60", ["fallback_fps"] = "60" });
-		Check(!s.AutoFallback, "fallback disabled when not lower than target");
+		Check(!s.FallbackEnabled && s.AutoFallback, "fallback inactive at target 60, stored choice kept");
+		s.TargetFps = 120;
+		Check(s.FallbackEnabled, "fallback active again at 120 (regression: was saved as off)");
+		Check(FrameSettings.FromValues(s.ToValues()).AutoFallback, "auto_fallback survives a save at 60");
 		var round = FrameSettings.FromValues(new FrameSettings { TargetFps = 90, ShowFps = true, AllowNonSeamlessSwitch = true }.ToValues());
 		Check(round.TargetFps == 90 && round.ShowFps && round.AllowNonSeamlessSwitch, "round trip");
 	}

@@ -26,7 +26,73 @@ public partial class Test : Node
 		return cf.GetValue("display", key);
 	}
 
+	private void Finish()
+	{
+		GD.Print($"[test] {mPassed} passed, {mFailed} failed");
+		GetTree().Quit(mFailed == 0 ? 0 : 1);
+	}
+
+	private static string Phase()
+	{
+		foreach (var a in OS.GetCmdlineUserArgs()) if (a.StartsWith("--phase=")) return a.Substring(8);
+		return "main";
+	}
+
+	private static void Hold(int fingers)
+	{
+		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, fingers);
+		FramePacing.Frame(1.0 / 60, 0);
+	}
+
 	public override void _Ready()
+	{
+		switch (Phase())
+		{
+			case "main": MainChecks(); return;
+			case "restart-1": Restart1(); break;
+			case "restart-2": Restart2(); break;
+			case "restart-3": Restart3(); break;
+			default: Check(false, "unknown phase " + Phase()); break;
+		}
+		Finish();
+	}
+
+	// Restart regression: each phase is a separate Godot process, so nothing survives in static state.
+	// 1: fresh install -> player picks 60 FPS and the FPS readout.
+	private void Restart1()
+	{
+		DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(FramePacing.ConfigPath));
+		FramePacing.Init(this, msg => mNotes.Add(msg));
+		Check(FramePacing.Settings.TargetFps == 120, "restart-1: fresh install defaults to 120");
+		Hold(4);
+		Hold(5);
+		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.Settings.ShowFps, "restart-1: 60 FPS + readout chosen");
+	}
+
+	// 2: after restart the choices are back; then back to 120, and a session fallback happens.
+	private void Restart2()
+	{
+		FramePacing.Init(this, msg => mNotes.Add(msg));
+		Check(FramePacing.Settings.TargetFps == 60, "restart-2: 60 FPS reloaded after restart");
+		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60, $"restart-2: engine capped at 60 after restart (MaxFps={Engine.MaxFps})");
+		Check(FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") != null, "restart-2: FPS readout reloaded and shown");
+		Hold(4);
+		Check(FramePacing.Settings.TargetFps == 120, "restart-2: switched back to 120");
+		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
+		Check(FramePacing.EffectiveFps == 60, "restart-2: session fallback active");
+	}
+
+	// 3: the 120 choice persisted, the session-only fallback did not.
+	private void Restart3()
+	{
+		FramePacing.Init(this, msg => mNotes.Add(msg));
+		Check(FramePacing.Settings.TargetFps == 120 && FramePacing.EffectiveFps == 120, "restart-3: 120 reloaded, fallback not persisted");
+		Check(Engine.MaxFps == 120 || (FramePacing.Decision.VsyncPaced && Engine.MaxFps == 0), $"restart-3: engine follows reloaded target (MaxFps={Engine.MaxFps})");
+		Check(FramePacing.Settings.ShowFps, "restart-3: readout setting still on");
+		Check(Cfg("auto_fallback").AsBool() && Cfg("fallback_fps").AsInt32() == 60, "restart-3: other settings intact");
+	}
+
+	private void MainChecks()
 	{
 		DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(FramePacing.ConfigPath));
 		FramePacing.Init(this, msg => mNotes.Add(msg));
@@ -81,7 +147,6 @@ public partial class Test : Node
 		GD.Print($"[test] measured {fps:0.0} FPS with Engine.MaxFps=30");
 		Check(fps > 24 && fps < 33, $"Engine.MaxFps limits real frame rate (measured {fps:0.0})");
 		mPhase = 2;
-		GD.Print($"[test] {mPassed} passed, {mFailed} failed");
-		GetTree().Quit(mFailed == 0 ? 0 : 1);
+		Finish();
 	}
 }

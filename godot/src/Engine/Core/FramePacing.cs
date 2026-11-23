@@ -53,7 +53,7 @@ namespace Svz
 			}
 			DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Enabled);
 			sMonitor = new FallbackMonitor(Settings.TargetFps);
-			Log($"settings: target={Settings.TargetFps} fallback={(Settings.AutoFallback ? Settings.FallbackFps.ToString(CultureInfo.InvariantCulture) : "off")} requestDisplayRate={Settings.RequestDisplayRate}");
+			Log($"settings: target={Settings.TargetFps} fallback={(Settings.FallbackEnabled ? Settings.FallbackFps.ToString(CultureInfo.InvariantCulture) : "off")} requestDisplayRate={Settings.RequestDisplayRate}");
 			Apply("init");
 			SetOverlay(Settings.ShowFps);
 		}
@@ -71,7 +71,7 @@ namespace Svz
 		public static void Frame(double delta, int touchCount)
 		{
 			if (sRoot == null) return;
-			if (Settings.AutoFallback && !sFallenBack && sMonitor.Feed(delta))
+			if (Settings.FallbackEnabled && !sFallenBack && sMonitor.Feed(delta))
 			{
 				sFallenBack = true;
 				Log($"target {Settings.TargetFps} not held ({sMonitor.LastWindow}); falling back to {Settings.FallbackFps} for this session");

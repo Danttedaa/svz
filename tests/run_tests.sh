@@ -33,3 +33,8 @@ dotnet build "$rt/FramePacingRuntimeTest.csproj" -nologo -v quiet
 # --import once so Godot registers the C# script class, then run the test scene
 "$godot_bin" --headless --path "$rt" --import >/dev/null 2>&1 || true
 "$godot_bin" --headless --path "$rt"
+
+echo "== settings survive an app restart (three separate processes)"
+for phase in restart-1 restart-2 restart-3; do
+  "$godot_bin" --headless --path "$rt" -- --phase=$phase
+done

@@ -23,6 +23,10 @@ namespace Svz
 		/// Surface.setFrameRate change strategy: false = only if seamless (no blank flash), true = always.
 		public bool AllowNonSeamlessSwitch;
 
+		/// The fallback only applies while it is lower than the target. Derived on purpose: the stored
+		/// auto_fallback choice must survive a period at 60 FPS (it used to be switched off and saved).
+		public bool FallbackEnabled => AutoFallback && FallbackFps < TargetFps;
+
 		public static int Sanitize(int fps, int fallback)
 		{
 			foreach (int a in AllowedTargets) if (a == fps) return fps;
@@ -40,7 +44,6 @@ namespace Svz
 			if (v.TryGetValue("show_fps", out var sf)) s.ShowFps = ParseBool(sf, s.ShowFps);
 			if (v.TryGetValue("request_display_rate", out var r)) s.RequestDisplayRate = ParseBool(r, s.RequestDisplayRate);
 			if (v.TryGetValue("allow_non_seamless_switch", out var n)) s.AllowNonSeamlessSwitch = ParseBool(n, s.AllowNonSeamlessSwitch);
-			if (s.FallbackFps >= s.TargetFps) s.AutoFallback = false; // nothing lower to fall back to
 			return s;
 		}
 

@@ -125,8 +125,18 @@ namespace Svz
 			Apply(why);
 		}
 
-		/// After a level load: loading hitches must not count against the frame-rate target.
-		public static void OnLevelLoaded() => sMonitor?.Reset();
+		/// After loading a new level, try the selected target again if a previous
+		/// crowded wave forced fallback. Never probe mid-wave, so a sustained
+		/// overload does not cause repeated 120/60 Hz switching.
+		public static void OnLevelLoaded()
+		{
+			sMonitor?.Reset(); // loading hitches must not count against the target
+			if (!sFallenBack || sRoot == null) return;
+			sFallenBack = false;
+			sFallbackReport = "";
+			Apply("new level retry");
+			Log($"new level: restored {Settings.TargetFps} FPS target after previous fallback");
+		}
 
 		/// Main._Notification forwards every notification here (used by the binary patch, tools/binpatch).
 		public static void OnNotification(int what)

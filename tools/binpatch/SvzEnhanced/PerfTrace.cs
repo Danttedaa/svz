@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Collections.Generic;
 using Godot;
 
 namespace Svz
@@ -23,6 +24,9 @@ namespace Svz
         private static long sRenderTicks, sGuiTicks;
         private static long sRenderMax, sGuiMax;
         private static int sRenderCount, sGuiCount;
+        private static readonly Dictionary<Type, int> sRendererKinds = new();
+        private static long sRendererStart, sSkinnedTicks, sParticleTicks;
+        private static int sRendererKind, sSkinnedCount, sParticleCount;
 
         public static void BeginRender()
         {
@@ -39,6 +43,37 @@ namespace Svz
             sRenderTicks += ticks;
             sRenderMax = Math.Max(sRenderMax, ticks);
             sRenderCount++;
+        }
+
+        // Called around each original Render.SyncRenderer invocation. No geometry,
+        // visibility, animation or material decisions are changed.
+        // Type classification is cached so it is not repeated for every ally/frame.
+        public static void BeginRenderer(object renderer)
+        {
+            if (!FramePacing.Settings.LogStats) { sRendererStart = 0; return; }
+            Type type = renderer?.GetType();
+            int kind = 0;
+            if (type != null)
+            {
+                if (!sRendererKinds.TryGetValue(type, out kind))
+                {
+                    string name = type.Name;
+                    kind = name == "SkinnedMeshRenderer" ? 1 : name == "ParticleRenderer" ? 2 : 0;
+                    sRendererKinds[type] = kind;
+                }
+            }
+            sRendererKind = kind;
+            sRendererStart = Stopwatch.GetTimestamp();
+        }
+
+        public static void EndRenderer()
+        {
+            if (sRendererStart == 0) return;
+            long ticks = Stopwatch.GetTimestamp() - sRendererStart;
+            sRendererStart = 0;
+            if (ticks < 0) return;
+            if (sRendererKind == 1) { sSkinnedTicks += ticks; sSkinnedCount++; }
+            else if (sRendererKind == 2) { sParticleTicks += ticks; sParticleCount++; }
         }
 
         public static void BeginGui()
@@ -65,14 +100,20 @@ namespace Svz
                 double ms = 1000.0 / Stopwatch.Frequency;
                 double renderAvg = sRenderTicks * ms / sRenderCount;
                 double guiAvg = sGuiTicks * ms / sGuiCount;
+                double skinAvg = sSkinnedTicks * ms / sRenderCount;
+                double fxAvg = sParticleTicks * ms / sRenderCount;
                 FramePacing.ExtraPerfOverlay = string.Format(CultureInfo.InvariantCulture,
-                    "Render {0:0.0}ms max {1:0.0} | UI {2:0.0}ms (CPU)", renderAvg, sRenderMax * ms, guiAvg);
+                    "Render {0:0.0}ms | Skin {1:0.0} FX {2:0.0} UI {3:0.0}ms (CPU)",
+                    renderAvg, skinAvg, fxAvg, guiAvg);
                 GD.Print(string.Format(CultureInfo.InvariantCulture,
-                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} (CPU-thread wall time; GPU not included)",
-                    renderAvg, sRenderMax * ms, sRenderCount, guiAvg, sGuiMax * ms, sGuiCount));
+                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} skin={6:0.00}ms ({7:0.0}/frame) fx={8:0.00}ms ({9:0.0}/frame) (CPU-thread wall time; GPU not included)",
+                    renderAvg, sRenderMax * ms, sRenderCount, guiAvg, sGuiMax * ms, sGuiCount,
+                    skinAvg, (double)sSkinnedCount / sRenderCount, fxAvg, (double)sParticleCount / sRenderCount));
             }
             sRenderTicks = sGuiTicks = sRenderMax = sGuiMax = 0;
             sRenderCount = sGuiCount = 0;
+            sSkinnedTicks = sParticleTicks = 0;
+            sSkinnedCount = sParticleCount = 0;
             sReportAt = now;
         }
     }

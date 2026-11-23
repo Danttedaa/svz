@@ -42,7 +42,9 @@ namespace Svz
 				_ => null,
 			};
 
-		public static void BeginHaloPass() { EnsureLoaded(); sHaloPass = Contrast; }
+		/// True only when the extra outline pass should actually draw. The patched GUI
+		/// skips the entire duplicate label traversal when this returns false.
+		public static bool BeginHaloPass() { EnsureLoaded(); sHaloPass = Contrast; return Contrast; }
 		public static void EndHaloPass() => sHaloPass = false;
 
 		/// Replaces CanvasItem.DrawTextureRectRegion in GuiCanvas.DrawText (same arguments, `self` first).

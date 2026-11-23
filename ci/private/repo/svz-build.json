@@ -6,5 +6,8 @@
   "version_code_base": 1000,
   "keep_builds": 5,
   "original_sha256": "",
-  "cert_sha256": ""
+  "cert_sha256": "",
+  "port_apk_url": "https://github.com/mesflit/svz/releases/download/latest/svz.apk",
+  "port_apk_sha256": "d9dfad74e7692206bb69bc77f9225cff75e5133928217f0003aaa3bb0529cbea",
+  "port_signer_sha256": "CCF14BCA217B417A286DCAACBFC999B71626B78E6DD2B41D05523F2B0299E532"
 }

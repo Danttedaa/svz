@@ -125,8 +125,8 @@ namespace Svz
 	/// VSync was skipped). After a startup grace period, frames are grouped into windows; a window is
 	/// "slow" when more than `MissRatio` of its frames were missed or its average rate is below
 	/// `MinRateRatio` of the target. `SlowWindowsToFallback` consecutive slow windows trigger the
-	/// fallback. Long frames (> HitchSeconds: level loads, app switches) are ignored, and Reset()
-	/// restarts the grace period (call it after level loads). Device temperature is not read.
+	/// fallback. A long frame (> HitchSeconds: level load, app switch) restarts the grace period, so
+	/// loading never counts against the target. Device temperature is not read.
 	public sealed class FallbackMonitor
 	{
 		public double StartupGraceSeconds = 10.0;
@@ -159,7 +159,8 @@ namespace Svz
 		/// Feed one frame's real (unscaled) duration. Returns true exactly once, when the fallback should happen.
 		public bool Feed(double frameSeconds)
 		{
-			if (Triggered || frameSeconds <= 0 || frameSeconds > HitchSeconds) return false;
+			if (Triggered || frameSeconds <= 0) return false;
+			if (frameSeconds > HitchSeconds) { Reset(); return false; }
 			if (mGrace < StartupGraceSeconds) { mGrace += frameSeconds; return false; }
 			mWindowTime += frameSeconds;
 			mFrames++;

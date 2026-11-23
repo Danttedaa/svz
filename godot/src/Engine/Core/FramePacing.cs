@@ -115,6 +115,12 @@ namespace Svz
 		/// After a level load: loading hitches must not count against the frame-rate target.
 		public static void OnLevelLoaded() => sMonitor?.Reset();
 
+		/// Main._Notification forwards every notification here (used by the binary patch, tools/binpatch).
+		public static void OnNotification(int what)
+		{
+			if (what == (int)MainLoop.NotificationApplicationResumed) OnResume();
+		}
+
 		/// Android drops the surface's frame-rate vote when the surface is recreated (app switch).
 		public static void OnResume()
 		{

@@ -13,7 +13,9 @@ import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PUBLIC_WORKFLOWS = sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")))
-PRIVATE_WORKFLOW = os.path.join(ROOT, "ci", "private", "repo", ".github", "workflows", "build-apk.yml")
+PRIVATE_DIR = os.path.join(ROOT, "ci", "private", "repo")
+PRIVATE_WORKFLOWS = sorted(glob.glob(os.path.join(PRIVATE_DIR, ".github", "workflows", "*.yml")))
+PRIVATE_WORKFLOW = os.path.join(PRIVATE_DIR, ".github", "workflows", "build-apk.yml")
 PRIVATE_GUARD = "github.event.repository.private != true"
 
 try:
@@ -79,7 +81,7 @@ class PublicWorkflows(unittest.TestCase):
             self.assertTrue(0 <= guard < build, f"{os.path.basename(wf)}: private-repository guard must come before the build")
 
     def test_artifacts_expire(self):
-        for wf in PUBLIC_WORKFLOWS + [PRIVATE_WORKFLOW]:
+        for wf in PUBLIC_WORKFLOWS + PRIVATE_WORKFLOWS:
             text = read(wf)
             for m in re.finditer(r"uses: actions/upload-artifact@[^\n]*\n((?:\s{8,}[^\n]*\n)*)", text):
                 block = m.group(1)
@@ -88,7 +90,7 @@ class PublicWorkflows(unittest.TestCase):
 
     @unittest.skipIf(yaml is None, "PyYAML not installed")
     def test_valid_yaml(self):
-        for wf in PUBLIC_WORKFLOWS + [PRIVATE_WORKFLOW]:
+        for wf in PUBLIC_WORKFLOWS + PRIVATE_WORKFLOWS:
             doc = yaml.safe_load(read(wf))
             self.assertIn("jobs", doc, wf)
 
@@ -97,12 +99,38 @@ class PrivateWorkflow(unittest.TestCase):
     def setUp(self):
         self.text = read(PRIVATE_WORKFLOW)
 
+    def test_found(self):
+        self.assertEqual([os.path.basename(w) for w in PRIVATE_WORKFLOWS], ["build-apk.yml", "build-from-port.yml"])
+
     def test_guard_is_first_step(self):
-        first_step = self.text.index("    steps:\n") + len("    steps:\n")
-        self.assertIn(PRIVATE_GUARD, self.text[first_step:first_step + 300])
+        for wf in PRIVATE_WORKFLOWS:
+            text = read(wf)
+            first_step = text.index("    steps:\n") + len("    steps:\n")
+            self.assertIn(PRIVATE_GUARD, text[first_step:first_step + 300], os.path.basename(wf))
+
+    def test_all_private_workflows(self):
+        for wf in PRIVATE_WORKFLOWS:
+            text = read(wf)
+            name = os.path.basename(wf)
+            self.assertIn("bash ci/ensure_key.sh", text, name)
+            self.assertNotIn("upload-artifact", text, name)
+            if yaml is not None:
+                doc = yaml.safe_load(text)
+                for st in steps(doc):
+                    self.assertNotIn("secrets.", st.get("run", ""), f"{name}: {st.get('name')}")
+                first = next(st for st in steps(doc) if "uses" in st)
+                self.assertEqual(first["with"]["ref"], "${{ github.event.repository.default_branch }}", name)
+
+    def test_port_route(self):
+        text = read(os.path.join(PRIVATE_DIR, ".github", "workflows", "build-from-port.yml"))
+        self.assertIn('sha256sum -c', text)                       # pinned input
+        self.assertIn('[ "$signer" = "$SIGNER" ]', text)          # pinned input signer
+        self.assertIn("tools/binpatch/build_from_port.sh", text)
+        self.assertIn("--ks-pass-env SVZ_KEY_PASSPHRASE", text)   # password via environment only
+        self.assertIn('rm -rf "$RUNNER_TEMP/key" "$RUNNER_TEMP/port"', text)
 
     def test_actions_pinned_to_commits(self):
-        for wf in [PRIVATE_WORKFLOW] + PUBLIC_WORKFLOWS:
+        for wf in PRIVATE_WORKFLOWS + PUBLIC_WORKFLOWS:
             if os.path.basename(wf) == "build.yml":
                 continue  # upstream workflow, kept as close to upstream as possible
             for m in re.finditer(r"uses:\s*([\w.-]+/[\w.-]+)@(\S+)", read(wf)):
@@ -122,8 +150,9 @@ class PrivateWorkflow(unittest.TestCase):
         self.assertIn('rm -rf "$RUNNER_TEMP/key" "$RUNNER_TEMP/original"', self.text)
 
     def test_key_only_from_secret_and_never_replaced(self):
-        self.assertIn("bash ci/signing.sh generate", self.text)
-        self.assertIn("a new key would break updates", self.text)
+        key = read(os.path.join(PRIVATE_DIR, "ci", "ensure_key.sh"))
+        self.assertIn("bash ci/signing.sh generate", key)
+        self.assertIn("a new key would break updates", key)
         self.assertNotIn("upload-artifact", self.text)  # nothing from a private build leaves as an artifact
 
     def test_checks_out_default_branch(self):
@@ -135,7 +164,7 @@ class PrivateWorkflow(unittest.TestCase):
 
     def test_no_user_site_installs(self):
         """`pip install --user` + `python -I` silently loses the package (isolated mode ignores user site)."""
-        for wf in PUBLIC_WORKFLOWS + [PRIVATE_WORKFLOW]:
+        for wf in PUBLIC_WORKFLOWS + PRIVATE_WORKFLOWS:
             self.assertNotIn("pip install --quiet --user", read(wf), os.path.basename(wf))
 
 

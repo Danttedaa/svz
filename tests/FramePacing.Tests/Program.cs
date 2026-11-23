@@ -122,6 +122,14 @@ internal static class Program
 		for (int i = 0; i < 300; i++) fired |= m.Feed(1.0 / 60);            // one slow window again
 		Check(!fired, "non-consecutive slow windows and hitches do not trigger");
 
+		// a loading hitch restarts the grace period: 9 s slow, hitch, 15 s slow -> no fallback yet
+		m = new FallbackMonitor(120);
+		fired = false;
+		for (int i = 0; i < 60 * 9; i++) fired |= m.Feed(1.0 / 60);
+		fired |= m.Feed(2.0);
+		for (int i = 0; i < 60 * 15; i++) fired |= m.Feed(1.0 / 60);
+		Check(!fired, "hitch restarts grace period");
+
 		// Reset() restarts the grace period
 		m = new FallbackMonitor(120);
 		for (int i = 0; i < 1200; i++) m.Feed(1.0 / 120);

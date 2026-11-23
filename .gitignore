@@ -35,3 +35,9 @@ tools/probe/.godot/
 tools/probe/bin/
 tools/probe/obj/
 tools/probe/nuget.config
+# binary patch tooling
+tools/binpatch/.cecil/
+tools/binpatch/**/bin/
+tools/binpatch/**/obj/
+tests/binpatch/**/bin/
+tests/binpatch/**/obj/

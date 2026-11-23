@@ -26,6 +26,10 @@ DEFAULTS = {
     "keep_builds": 5,
     "original_sha256": "",
     "cert_sha256": "",
+    # build from a prebuilt port APK (build-from-port.yml); its SHA-256 and signer are pinned here
+    "port_apk_url": "",
+    "port_apk_sha256": "",
+    "port_signer_sha256": "",
 }
 PINS = {"original_sha256", "cert_sha256"}
 ORIGINAL_PACKAGE = "com.glu.samuzombie"
@@ -63,6 +67,12 @@ def validate(cfg):
         raise ConfigError("original_sha256 must be 64 lower-case hex digits or empty")
     if cfg["cert_sha256"] and not re.fullmatch(r"[0-9A-F]{64}", cfg["cert_sha256"]):
         raise ConfigError("cert_sha256 must be 64 upper-case hex digits or empty")
+    if cfg["port_apk_url"] and not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/releases/download/[\w.%-]+/[\w.%-]+\.apk", cfg["port_apk_url"]):
+        raise ConfigError("port_apk_url must be a GitHub release asset URL ending in .apk")
+    if cfg["port_apk_url"] and not re.fullmatch(r"[0-9a-f]{64}", cfg["port_apk_sha256"]):
+        raise ConfigError("port_apk_sha256 (64 lower-case hex digits) is required with port_apk_url")
+    if cfg["port_signer_sha256"] and not re.fullmatch(r"[0-9A-F]{64}", cfg["port_signer_sha256"]):
+        raise ConfigError("port_signer_sha256 must be 64 upper-case hex digits or empty")
 
 
 def set_pin(key, value, path=CONFIG):

@@ -14,27 +14,20 @@
 #   4. builds the engine commit (svz-build.json: engine_repo/engine_ref) with the engine's Nix toolchain,
 #      verifies the APK, publishes it as a release of THIS repository, keeps the newest keep_builds builds
 #   5. reports to the issue "Build status" (readable on the phone)
-# Triggers: push (config/workflow changes), the "original" release being published, daily (only when the
-# engine has a new commit), manual, repository_dispatch from the public repo.
+# Triggers: the "original" release being published, manual. (The default route is build-from-port.yml.)
 name: Build SvZ Enhanced APK
 
 on:
-  push:
-    branches: [main]
   release:
-    types: [published]
-  schedule:
-    - cron: "41 2 * * *"
+    types: [published]   # uploading the release "original" (second route; build-from-port.yml is the default)
   workflow_dispatch:
-  repository_dispatch:
-    types: [engine-updated]
 
 permissions:
   contents: write   # releases, pins
   issues: write     # "Build status" issue
 
 concurrency:
-  group: build-apk
+  group: build-apk-original
   cancel-in-progress: false
 
 env:
@@ -72,33 +65,8 @@ jobs:
         id: key
         env:
           SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
-        run: |
-          pinned=$(python3 -I ci/config.py get cert_sha256)
-          if [ -z "$SVZ_KEY_PASSPHRASE" ]; then
-            echo "- ⏳ **Waiting for you:** add the secret \`SVZ_KEY_PASSPHRASE\` (Settings → Secrets and variables → Actions)." >> "$RUNNER_TEMP/status.md"
-            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ ! -f "$KEYFILE" ]; then
-            if [ -n "$pinned" ]; then
-              echo "::error::$KEYFILE is missing but a certificate is pinned. Restore the file from your backup; a new key would break updates."
-              echo "- ❌ Signing key file missing although a key is pinned: restore \`$KEYFILE\` from your backup." >> "$RUNNER_TEMP/status.md"
-              exit 1
-            fi
-            fp=$(bash ci/signing.sh generate "$KEYFILE")
-            python3 -I ci/config.py set cert_sha256 "$fp"
-            git add "$KEYFILE" svz-build.json
-            git commit -q -m "Create release signing key (encrypted) and pin its certificate"
-            git push -q
-            echo "- 🔑 Created your release signing key (stored encrypted in \`$KEYFILE\`). **Back it up:** download that file and keep it with the passphrase in your password manager." >> "$RUNNER_TEMP/status.md"
-            pinned="$fp"
-          fi
-          (umask 077; mkdir -p "$RUNNER_TEMP/key")
-          got=$(bash ci/signing.sh decrypt "$KEYFILE" "$RUNNER_TEMP/key/release.p12") || {
-            echo "- ❌ Could not decrypt the signing key: is \`SVZ_KEY_PASSPHRASE\` the passphrase it was created with?" >> "$RUNNER_TEMP/status.md"; exit 1; }
-          [ "$got" = "$pinned" ] || { echo "::error::signing key certificate $got != pinned $pinned"; exit 1; }
-          echo "- ✅ Signing key OK (certificate \`${got:0:16}…\`)" >> "$RUNNER_TEMP/status.md"
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "cert=$got" >> "$GITHUB_OUTPUT"
+          STATUS: ${{ runner.temp }}/status.md
+        run: bash ci/ensure_key.sh
 
       - name: Original game files (release "original")
         id: orig

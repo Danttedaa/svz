@@ -51,3 +51,27 @@ echo "== settings survive an app restart (three separate processes)"
 for phase in restart-1 restart-2 restart-3; do
   "$godot_bin" --headless --path "$rt" -- --phase=$phase
 done
+
+echo "== binary patch tool (tools/binpatch) on a stand-in for SvZPort.dll"
+bp=$(mktemp -d)
+cat > "$bp/nuget.config" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<configuration><packageSources><clear /><add key="godot-bundled" value="$godot_dir/GodotSharp/Tools/nupkgs" /></packageSources></configuration>
+XML
+"$here/../tools/binpatch/get_cecil.sh" > /dev/null
+for p in tools/binpatch/SvzEnhanced/SvzEnhanced.csproj tools/binpatch/SvzPatch/SvzPatch.csproj tests/binpatch/FakePort/FakePort.csproj; do
+  out="$bp/$(basename "$p" .csproj)"
+  dotnet build "$here/../$p" -c Release -nologo -v quiet --configfile "$bp/nuget.config" -o "$out" > "$bp/build.log" 2>&1 \
+    || { cat "$bp/build.log"; exit 1; }
+done
+dotnet "$bp/SvzPatch/SvzPatch.dll" patch "$bp/FakePort/SvZPort.dll" "$bp/SvzEnhanced/SvzEnhanced.dll" "$bp/patched.dll" > /dev/null
+dotnet "$bp/SvzPatch/SvzPatch.dll" check "$bp/patched.dll" "$bp/SvzEnhanced/SvzEnhanced.dll"
+if dotnet "$bp/SvzPatch/SvzPatch.dll" patch "$bp/patched.dll" "$bp/SvzEnhanced/SvzEnhanced.dll" "$bp/twice.dll" > /dev/null 2>&1; then
+  echo "FAIL: patching twice must be refused"; exit 1
+fi
+if dotnet "$bp/SvzPatch/SvzPatch.dll" check "$bp/FakePort/SvZPort.dll" > /dev/null; then
+  echo "FAIL: unpatched input passed the check"; exit 1
+fi
+echo "binpatch OK (patched, check + resolution passed, double patch refused)"
+rm -rf "$bp"
+

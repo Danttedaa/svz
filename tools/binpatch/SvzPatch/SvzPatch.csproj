@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Mono.Cecil is compiled from source (MIT, https://github.com/jbevain/cecil, tag 0.11.6):
+       tools/binpatch/get_cecil.sh puts it in tools/binpatch/.cecil (git-ignored). No NuGet packages needed. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <RollForward>Major</RollForward>
+    <NoWarn>$(NoWarn);CS0618;CS1591;CS0649;CS0169;CS0414;CS8981;CS0162;CS0219</NoWarn>
+    <DefineConstants>$(DefineConstants);NET_CORE</DefineConstants>
+    <CecilSrc Condition="'$(CecilSrc)' == ''">$(MSBuildThisFileDirectory)../.cecil</CecilSrc>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CecilSrc)/Mono/**/*.cs;$(CecilSrc)/Mono.Cecil/**/*.cs;$(CecilSrc)/Mono.Cecil.Cil/**/*.cs;$(CecilSrc)/Mono.Cecil.Metadata/**/*.cs;$(CecilSrc)/Mono.Cecil.PE/**/*.cs;$(CecilSrc)/Mono.Collections.Generic/**/*.cs;$(CecilSrc)/Mono.Security.Cryptography/**/*.cs;$(CecilSrc)/ProjectInfo.cs;$(CecilSrc)/rocks/Mono.Cecil.Rocks/**/*.cs" Exclude="$(CecilSrc)/rocks/Mono.Cecil.Rocks/AssemblyInfo.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>

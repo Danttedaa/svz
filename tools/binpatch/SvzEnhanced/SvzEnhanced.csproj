@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The enhancement code (same sources as the full port build) as a separate assembly, for patching a
+       prebuilt SvZ port APK (tools/binpatch). Godot's Android host loads it by name from the APK's
+       assets/.godot/mono/publish/<arch>/ folder, next to SvZPort.dll. No Godot script classes inside. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>SvzEnhanced</AssemblyName>
+    <RootNamespace>Svz</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="GodotSharp" Version="4.7.2" />
+    <Compile Include="../../../godot/src/Engine/Core/FramePacing.cs" Link="FramePacing.cs" />
+    <Compile Include="../../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
+  </ItemGroup>
+</Project>

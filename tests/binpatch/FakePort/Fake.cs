@@ -145,9 +145,7 @@ internal sealed class FontSetFinder
 }
 
 
-namespace Svz
-{
-	// Private mesh arrays for the particle optimization fixture (no game asset data).
+// Private mesh arrays for the particle optimization fixture (no game asset data).
 namespace UnityEngine
 {
     public struct Vector3 { public float x, y, z; }
@@ -166,7 +164,9 @@ namespace UnityEngine
     }
 }
 
-// Stand-in iteration shapes only; no proprietary particle/animation data.
+namespace Svz
+{
+	// Stand-in iteration shapes only; no proprietary particle/animation data.
 	public class FakeParticleEmitter { }
 	public class FakeAnimationState { }
 	public class FakeAnimation

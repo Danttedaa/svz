@@ -1,5 +1,8 @@
 # SvZ Enhanced: changes on top of the Godot port
 
+> Current state, exact commits, build commands, test results and next steps: [`HANDOFF.md`](HANDOFF.md).
+> Fastest build route (no original game APK): `tools/binpatch/build_from_port.sh`.
+
 Development branch work for a high-refresh-rate SvZ Defense build aimed at the Samsung Galaxy S25 Ultra
 (Android 17, arm64-only, 120 Hz). Same rules as upstream: no game code or assets are in this repository;
 you build from your own copy of the 3.4.0 APK with `tools/build.sh`.

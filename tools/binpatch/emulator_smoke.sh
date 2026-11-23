@@ -134,6 +134,11 @@ else
     if launch_level battle 2 60 --level=2 --killall=30; then
       grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"
+      if grep -q "\[svz-perf\] render-sync" "$out/logcat-battle.txt"; then
+        grep -m1 -o "\[svz-perf\].*" "$out/logcat-battle.txt" | sed 's/^/battle: /' >> "$out/details.txt"
+      else
+        warn+=("battle: no [svz-perf] render timing sample; profiler unverified")
+      fi
       grep -o "\[svz-death\].*" "$out/logcat-battle.txt" | head -3 | sed 's/^/battle: /' >> "$out/details.txt"
     fi
   fi

@@ -14,7 +14,7 @@ namespace Svz
     public static class UiReadableText
     {
         private const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        private static bool sWarned;
+        private static bool sWarned, sLoggedDraw;
         private static Font sFont;
 
         private static object Member(object obj, string name)
@@ -89,6 +89,11 @@ namespace Svz
                     var at = new Vector2(x, baseline);
                     self.DrawStringOutline(font, at, lines[i], align, w, size, 1, edge);
                     self.DrawString(font, at, lines[i], align, w, size, ink);
+                }
+                if (!sLoggedDraw)
+                {
+                    sLoggedDraw = true;
+                    GD.Print("[svz-ui] readable font first label rendered");
                 }
                 return true;
             }

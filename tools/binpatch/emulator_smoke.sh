@@ -98,7 +98,12 @@ else
     # stage 2: Store (fonts + contrast halo)
     if launch_level store 3 45 --level=3; then
       grep -q "\[svz-ui\] text scale" "$out/logcat-store.txt" && note "store: text settings loaded ($(grep -m1 -o '\[svz-ui\].*' "$out/logcat-store.txt"))" \
-        || warn+=("store: no [svz-ui] line (no GUI text drawn?)")
+        || fail+=("store: readable text mode did not initialize")
+      if grep -q "\[svz-ui\] readable font first label rendered" "$out/logcat-store.txt"; then
+        note "store: clean native font actually drew a label"
+      else
+        fail+=("store: native font never rendered; small labels still use distressed bitmap")
+      fi
     fi
     # stage 3: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then

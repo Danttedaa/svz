@@ -15,8 +15,8 @@ namespace Svz
 	///   this calls Surface.setFrameRate() on Godot's render surface through the AndroidRuntime bridge.
 	/// - Explicit engine limit <=120 FPS even when VSync/display are at 120 Hz.
 	/// - Optional one-way fallback (default 120 -> 60) when the target cannot be held (FallbackMonitor).
-	/// - In-game toggles without touching the game's menus: hold 4 fingers for 1.5 s to switch
-	///   120 <-> 60 FPS, hold 5 fingers for 1.5 s to show/hide the FPS readout.
+	/// - Fixed 120 FPS target by default; FPS and overlay changes are config/CLI-only,
+	///   not hidden multi-finger gestures. The only phone gesture is the text A/B toggle.
 	/// - Log lines start with "[svz-fps]" (adb logcat -s godot).
 	public static class FramePacing
 	{
@@ -43,8 +43,6 @@ namespace Svz
 		private static FallbackMonitor sMonitor;
 		private static bool sFallenBack;
 		private static string sFallbackReport = "";
-		private static readonly HoldGesture sToggleFps = new HoldGesture(4, 1.5);
-		private static readonly HoldGesture sToggleOverlay = new HoldGesture(5, 1.5);
 		private static double sRecheckIn = -1, sPeriodic;
 		private static int sGameRequested = int.MinValue;
 		private static Label sOverlay;
@@ -94,17 +92,6 @@ namespace Svz
 				Log("fallback reason: " + sFallbackReport);
 				Apply("fallback");
 				sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
-			}
-			if (sToggleFps.Update(touchCount, delta))
-			{
-				SetTargetFps(Settings.TargetFps >= 120 ? 60 : 120, "toggle");
-				sNotify?.Invoke($"Frame rate: {Settings.TargetFps} FPS");
-			}
-			if (sToggleOverlay.Update(touchCount, delta))
-			{
-				Settings.ShowFps = !Settings.ShowFps;
-				Save();
-				SetOverlay(Settings.ShowFps);
 			}
 			if (sRecheckIn > 0 && (sRecheckIn -= delta) <= 0) Recheck("after request");
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }

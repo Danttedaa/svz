@@ -196,7 +196,7 @@ namespace Svz
 	public static class Render
 	{
 		public static int Hidden;
-		public static void Sync() { }
+		public static void Sync() { SyncRenderer(new object()); }
 		private static void SyncRenderer(object r)
 		{
 			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;

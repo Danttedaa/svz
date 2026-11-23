@@ -29,6 +29,8 @@ namespace Svz
         private static readonly Dictionary<Type, int> sRendererKinds = new();
         private static long sRendererStart, sSkinnedTicks, sParticleTicks;
         private static int sRendererKind, sSkinnedCount, sParticleCount;
+        private static long sAnimStart, sParticleSimStart, sAnimTicks, sParticleSimTicks;
+        private static int sAnimCount, sParticleSimCount;
         private static long sFrameSkinTicks, sFrameParticleTicks;
         private static int sFrameSkinCount, sFrameParticleCount;
 
@@ -60,6 +62,23 @@ namespace Svz
             sParticleTicks += sFrameParticleTicks;
             sSkinnedCount += sFrameSkinCount;
             sParticleCount += sFrameParticleCount;
+        }
+
+        // Animation and particle simulation may dominate crowd battles even when
+        // render synchronization is cheap. Measure them separately without modifying dt.
+        public static void BeginAnimation() => sAnimStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+        public static void EndAnimation() => RecordSample(ref sAnimStart, ref sAnimTicks, ref sAnimCount);
+        public static void BeginParticleSim() => sParticleSimStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+        public static void EndParticleSim() => RecordSample(ref sParticleSimStart, ref sParticleSimTicks, ref sParticleSimCount);
+
+        private static void RecordSample(ref long start, ref long total, ref int count)
+        {
+            if (start == 0) return;
+            long ticks = Stopwatch.GetTimestamp() - start;
+            start = 0;
+            if (ticks < 0 || (double)ticks / Stopwatch.Frequency > MaxSampleSeconds) return;
+            total += ticks;
+            count++;
         }
 
         // Called around each original Render.SyncRenderer invocation. No geometry,
@@ -123,20 +142,24 @@ namespace Svz
                 double guiAvg = sGuiTicks * ms / sGuiCount;
                 double skinAvg = sSkinnedTicks * ms / sRenderCount;
                 double fxAvg = sParticleTicks * ms / sRenderCount;
+                double animAvg = sAnimCount > 0 ? sAnimTicks * ms / sAnimCount : 0;
+                double simAvg = sParticleSimCount > 0 ? sParticleSimTicks * ms / sParticleSimCount : 0;
                 FramePacing.ExtraPerfOverlay = string.Format(CultureInfo.InvariantCulture,
-                    "Render {0:0.0}ms | Skin {1:0.0} FX {2:0.0} UI {3:0.0}ms (CPU)",
-                    renderAvg, skinAvg, fxAvg, guiAvg);
+                    "Render {0:0.0}ms | Skin {1:0.0} FX {2:0.0} UI {3:0.0}ms\nAnim {4:0.0} PartSim {5:0.0}ms (CPU)",
+                    renderAvg, skinAvg, fxAvg, guiAvg, animAvg, simAvg);
                 GD.Print(string.Format(CultureInfo.InvariantCulture,
-                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} skin={6:0.00}ms ({7:0.0}/frame) fx={8:0.00}ms ({9:0.0}/frame) excluded_hitches={10}/{11} (CPU-thread wall time; GPU not included)",
+                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} skin={6:0.00}ms ({7:0.0}/frame) fx={8:0.00}ms ({9:0.0}/frame) excluded_hitches={10}/{11} anim={12:0.00}ms sim={13:0.00}ms (CPU-thread wall time; GPU not included)",
                     renderAvg, sRenderMax * ms, sRenderCount, guiAvg, sGuiMax * ms, sGuiCount,
                     skinAvg, (double)sSkinnedCount / sRenderCount, fxAvg, (double)sParticleCount / sRenderCount,
-                    sIgnoredRenderHitches, sIgnoredGuiHitches));
+                    sIgnoredRenderHitches, sIgnoredGuiHitches, animAvg, simAvg));
             }
             sRenderTicks = sGuiTicks = sRenderMax = sGuiMax = 0;
             sRenderCount = sGuiCount = 0;
             sIgnoredRenderHitches = sIgnoredGuiHitches = 0;
             sSkinnedTicks = sParticleTicks = 0;
             sSkinnedCount = sParticleCount = 0;
+            sAnimTicks = sParticleSimTicks = 0;
+            sAnimCount = sParticleSimCount = 0;
             sReportAt = now;
         }
     }

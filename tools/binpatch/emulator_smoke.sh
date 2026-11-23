@@ -51,7 +51,8 @@ make_variant() {   # stage args... -> prints the signed variant path
 }
 
 start_app() {  # stage; retain the launcher result instead of swallowing a missing activity
-  local stage="$1" result="$out/launch-$stage.txt"
+  local stage="$1"
+  local result="$out/launch-$stage.txt"
   if ! adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > "$result" 2>&1; then
     fail+=("$stage: launcher command failed: $(tail -2 "$result" | tr '\n' ' ' | cut -c1-200)")
     return 1

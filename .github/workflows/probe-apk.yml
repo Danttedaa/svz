@@ -69,9 +69,10 @@ jobs:
 
       - name: Verify APK
         run: |
-          python3 -m pip install --quiet --user androguard==4.1.4
+          python3 -m venv "$RUNNER_TEMP/venv"   # not pip --user: python -I ignores user site-packages
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet androguard==4.1.4
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
-          python3 -I tools/verify/verify_apk.py build/svz-probe.apk --require-abi arm64-v8a \
+          "$RUNNER_TEMP/venv/bin/python" -I tools/verify/verify_apk.py build/svz-probe.apk --require-abi arm64-v8a \
             --expect-package io.github.danttedaa.svzprobe --forbid-permission android.permission.INTERNET \
             --check-bridge --apksigner "$apksigner" --json build/verify.json
 

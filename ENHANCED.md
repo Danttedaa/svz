@@ -99,22 +99,17 @@ No emulator was used: the cloud session had no KVM and no access to the Android 
 
 ## Milestone 2: private build pipeline (installable APKs without re-supplying the game)
 
-See [`ci/private/README.md`](ci/private/README.md). Summary:
-
-- The original APK is uploaded once to a **private** repository (release `original`, SHA-256 pinned).
-- `ci/private/build-apk.yml` (installed there by `tools/private_build_setup.sh`) checks out an engine
-  commit of this repository, builds with the pinned Nix toolchain, signs with your key (refusing any other
-  key), verifies the APK and publishes it as a release of the private repository.
-- Rebuilds: manual, daily when the engine has a new commit, or on push via the optional notifier.
-- This public repository publishes nothing: `build.yml` lost its release steps and refuses to run in a
-  public repository; `tests/tools/test_workflows.py` keeps it that way.
-
-New tools:
+See [`ci/private/README.md`](ci/private/README.md). The template in `ci/private/repo/` goes into a
+private repository; setup needs only a phone browser (one secret, one release upload). The first run creates
+the release key (stored only encrypted), later runs build, sign, verify and publish privately.
+This public repository publishes nothing: `build.yml` lost its release steps and refuses to run in a public
+repository; `tests/tools/test_workflows.py` keeps it that way.
 
 | file | purpose |
 |---|---|
-| `tools/private_build_setup.sh` | one-time setup of the private repository (run on your computer) |
+| `ci/private/repo/` | private repository template: workflow, `ci/signing.sh`, `ci/config.py`, `svz-build.json` |
 | `tools/set_android_preset.py` | package id, app name, versionCode, versionName for one build (`tools/build.sh --package ...`) |
 | `tools/verify/verify_apk.py` | arm64-v8a, no INTERNET permission, package, versionCode, signer, bridge methods, apksigner |
-| `tools/verify/cert_fingerprint.py` | signing certificate fingerprint check (`SVZ_EXPECT_CERT_SHA256` in `tools/build.sh`) |
-| `tools/verify/device_check.py` | on the phone: SurfaceFlinger present timestamps + `[svz-fps]` stats -> PASS/FAIL at 120 FPS |
+| `tools/verify/cert_fingerprint.py` | signing certificate check (`SVZ_EXPECT_CERT_SHA256` in `tools/build.sh`) |
+| `tools/verify/device_check.py` | on a PC with adb: SurfaceFlinger present timestamps + `[svz-fps]` stats -> PASS/FAIL at 120 FPS |
+| `tools/probe/` + `.github/workflows/probe-apk.yml` | 120 Hz probe app: the frame-pacing code on a phone, no game files |

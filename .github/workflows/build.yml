@@ -2,7 +2,7 @@
 #
 # SvZ Enhanced: the APKs and archives built here contain the original game, so this workflow
 # refuses to run in a public repository and never publishes releases. For the enhanced Android
-# build use the private pipeline instead: ci/private/build-apk.yml (see ci/private/README.md).
+# build use the private pipeline instead (template in ci/private/repo, see ci/private/README.md).
 # Artifacts are kept for 3 days and are visible only to people with access to the private repository.
 #
 # Needs repository secrets (Settings > Secrets and variables > Actions):

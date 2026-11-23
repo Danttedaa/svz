@@ -101,7 +101,7 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def check_original(apk, obb=None):
+def check_original(apk, obb=None, require_manifest=False):
     """Return (sha256, notes). Raises ConfigError if this cannot be the SvZ Defense 3.4 APK."""
     try:
         with zipfile.ZipFile(apk) as z:
@@ -129,6 +129,8 @@ def check_original(apk, obb=None):
             raise ConfigError(f"version {ver}: the port supports Samurai vs Zombies Defense 3.4.x")
         notes.append(f"{pkg} {ver}")
     except ImportError:
+        if require_manifest:
+            raise ConfigError("androguard is needed to check the package and version (pip install androguard==4.1.4)")
         notes.append("androguard not installed: package/version not checked")
     return sha256_file(apk), notes
 
@@ -152,7 +154,7 @@ def main(argv):
                 return 1
             print(fp)
         elif cmd == "check-original":
-            sha, notes = check_original(argv[1], argv[2] if len(argv) > 2 else None)
+            sha, notes = check_original(argv[1], argv[2] if len(argv) > 2 else None, require_manifest=True)
             print(sha)
             for n in notes:
                 print("note: " + n, file=sys.stderr)

@@ -106,6 +106,11 @@ class PrivateWorkflow(unittest.TestCase):
         self.assertIn("a new key would break updates", self.text)
         self.assertNotIn("upload-artifact", self.text)  # nothing from a private build leaves as an artifact
 
+    def test_no_user_site_installs(self):
+        """`pip install --user` + `python -I` silently loses the package (isolated mode ignores user site)."""
+        for wf in PUBLIC_WORKFLOWS + [PRIVATE_WORKFLOW]:
+            self.assertNotIn("pip install --quiet --user", read(wf), os.path.basename(wf))
+
 
 class NoGameFilesCommitted(unittest.TestCase):
     def test_tracked_files(self):

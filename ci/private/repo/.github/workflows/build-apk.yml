@@ -115,8 +115,10 @@ jobs:
           apks=(*.apk); obbs=(*.obb)
           [ -f "${apks[0]}" ] && [ ${#apks[@]} = 1 ] || { echo "- ❌ Release \`original\` must contain exactly one APK (found: ${apks[*]})." >> "$RUNNER_TEMP/status.md"; exit 1; }
           apk="$PWD/${apks[0]}"; obb=""; [ -f "${obbs[0]}" ] && obb="$PWD/${obbs[0]}"
-          python3 -m pip install --quiet --user androguard==4.1.4
-          sha=$(python3 -I "$GITHUB_WORKSPACE/ci/config.py" check-original "$apk" $obb 2> notes.txt) || {
+          python3 -m venv "$RUNNER_TEMP/venv"   # not pip --user: python -I ignores user site-packages
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet androguard==4.1.4
+          echo "SVZ_PY=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          sha=$("$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/ci/config.py" check-original "$apk" $obb 2> notes.txt) || {
             echo "- ❌ The original does not look right: $(tail -1 notes.txt)" >> "$RUNNER_TEMP/status.md"; exit 1; }
           # signature: valid, and the signer's certificate is recorded
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
@@ -205,7 +207,7 @@ jobs:
         run: |
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)apksigner
           [ -x "$apksigner" ] || apksigner=$(nix develop -c printenv ANDROID_HOME | tail -1)/build-tools/35.0.0/apksigner
-          python3 -I tools/verify/verify_apk.py build/svz.apk --require-abi arm64-v8a --expect-package "$PACKAGE" \
+          "$SVZ_PY" -I tools/verify/verify_apk.py build/svz.apk --require-abi arm64-v8a --expect-package "$PACKAGE" \
             --min-version-code "$VC" --forbid-permission android.permission.INTERNET --expect-cert-sha256 "$CERT" \
             --check-bridge --apksigner "$apksigner" --json build/verify.json
           apk="SvZ-Enhanced-$VC-$SHORT.apk"; mv build/svz.apk "build/$apk"

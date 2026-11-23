@@ -15,13 +15,13 @@ namespace Svz
 	/// Size: see <see cref="UiFontQuality"/>. Hold 3 fingers for 2 s to switch between 100 % and 115 % (130 % clips the Store captions).
 	///
 	/// Settings: user://svz_ui.cfg, section [text]: scale (80..150%, default 100) and font_mode_v1.
-	/// Two-finger hold cycles solid-small-text, original and outlined modes; large headings remain original.
+	/// Two-finger hold cycles readable, solid, original, outlined; major art headings remain original.
 	/// </summary>
 	public static class UiText
 	{
 		public const string ConfigPath = "user://svz_ui.cfg";
 		public static bool Contrast = false;
-		public static int FontMode = UiInkPolicy.Solid;
+		public static int FontMode = UiInkPolicy.Native;
 		private static bool sHaloPass, sLoaded;
 		private static float sViewportHeight;
 		private static ulong sOffsetFrame = ulong.MaxValue;
@@ -165,13 +165,15 @@ namespace Svz
 				// Do not carry that implicit legacy default forward. A new key records explicit opt-in.
 				int previousMode = exists && cf.HasSectionKey("text", "outline_v2") && cf.GetValue("text", "outline_v2").AsBool()
 					? UiInkPolicy.Outlined : UiInkPolicy.Solid;
-				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v1")
-					? cf.GetValue("text", "font_mode_v1").AsInt32() : previousMode;
-				FontMode = requestedMode >= UiInkPolicy.Solid && requestedMode <= UiInkPolicy.Outlined
-					? requestedMode : UiInkPolicy.Solid;
+				// On upgrade to this version, choose the clean UI font once;
+				// users can return to the original font with the gesture.
+				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v2")
+					? cf.GetValue("text", "font_mode_v2").AsInt32() : UiInkPolicy.Native;
+				FontMode = requestedMode >= UiInkPolicy.Solid && requestedMode <= UiInkPolicy.Native
+					? requestedMode : UiInkPolicy.Native;
 				Contrast = FontMode == UiInkPolicy.Outlined;
 				UiFontQuality.TextScale = Math.Clamp(scale, (int)(UiFontQuality.MinTextScale * 100), (int)(UiFontQuality.MaxTextScale * 100)) / 100f;
-				if (!exists || !cf.HasSectionKey("text", "font_mode_v1")) Save();
+				if (!exists || !cf.HasSectionKey("text", "font_mode_v2")) Save();
 				FramePacing.AfterFrame += OnFrame;
 				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, mode {UiInkPolicy.ModeName(FontMode)}, contrast {(Contrast ? "on" : "off")}");
 			}
@@ -187,7 +189,8 @@ namespace Svz
 			cf.SetValue("text", "scale", (int)Math.Round(UiFontQuality.TextScale * 100));
 			cf.SetValue("text", "contrast", Contrast); // compatibility if rolling back to v1012
 			cf.SetValue("text", "outline_v2", Contrast);
-			cf.SetValue("text", "font_mode_v1", FontMode);
+			cf.SetValue("text", "font_mode_v1", FontMode == UiInkPolicy.Native ? UiInkPolicy.Solid : FontMode);
+			cf.SetValue("text", "font_mode_v2", FontMode);
 			cf.Save(ConfigPath);
 		}
 

@@ -260,7 +260,18 @@ namespace Svz
 			var mesh = r.__pmesh;
 			var e = r.__go.__Find<ParticleEmitter>();
 			int n = e?.__ps.Count ?? 0;
-			var v = new Vector3[n * 4]; var uv = new Vector2[n * 4]; var col = new Color[n * 4]; var tri = new int[n * 6];
+			int vertexCount = n * 4, indexCount = n * 6;
+			int oldIndexCount = mesh.__subs.Count == 1 ? mesh.__subs[0].Length : -1;
+			// Render.SyncRenderer hides zero-vertex meshes. Once cleared, an unchanged
+			// empty emitter needs neither a fresh allocation nor a new GPU upload.
+			if (n == 0 && ParticleBuffers.IsAlreadyEmpty(mesh.__loaded, mesh.__v.Length,
+				mesh.__subs.Count, oldIndexCount)) return mesh;
+			// Buffers belong to this renderer's private mesh. The previous GPU
+			// upload copied their contents; they can be overwritten next frame.
+			var v = ParticleBuffers.EnsureSize(mesh.__v, vertexCount);
+			var uv = ParticleBuffers.EnsureSize(mesh.__uv, vertexCount);
+			var col = ParticleBuffers.EnsureSize(mesh.__c, vertexCount);
+			var tri = ParticleBuffers.EnsureSize(mesh.__subs.Count == 1 ? mesh.__subs[0] : null, indexCount);
 			Vector3 camRight = cam != null ? cam.transform.right : Vector3.right;
 			Vector3 camUp = cam != null ? cam.transform.up : Vector3.up;
 			Vector3 camFwd = cam != null ? cam.transform.forward : Vector3.forward;
@@ -330,8 +341,9 @@ namespace Svz
 				tri[k] = b; tri[k + 1] = b + 1; tri[k + 2] = b + 2; tri[k + 3] = b; tri[k + 4] = b + 2; tri[k + 5] = b + 3;
 			}
 			mesh.__loaded = true;
-			mesh.__v = v; mesh.__uv = uv; mesh.__c = col; mesh.__n = new Vector3[0];
-			mesh.__subs = new List<int[]> { tri };
+			mesh.__v = v; mesh.__uv = uv; mesh.__c = col; mesh.__n = Array.Empty<Vector3>();
+			if (mesh.__subs.Count != 1 || !ReferenceEquals(mesh.__subs[0], tri))
+				mesh.__subs = new List<int[]>(1) { tri };
 			mesh.__version++;
 			return mesh;
 		}

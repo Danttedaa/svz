@@ -593,14 +593,19 @@ internal static class Program
 		Require(a0 != null && a0.OpCode == OpCodes.Ldarg && a0.Operand == draw.ThisParameter && IsLoad(a1) && IsLoad(a2),
 			"GuiCanvas._Draw: DrawText(this, local text, sh)");
 		var il = draw.GetILProcessor();
-		// keep a0 as the branch target: it becomes BeginHaloPass, then a duplicate call, EndHaloPass, the original call
-		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
+		// When the optional outline is OFF, skip the entire extra DrawText traversal.
+		// Otherwise the first pass would draw the original glyphs and the second pass would
+		// draw them again, making letters look thicker and wasting GPU draw calls.
+		// Preserve a0 as the original branch target; conditional false jumps to the
+		// untouched regular DrawText invocation.
+		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Boolean, uiText) { HasThis = false };
 		var end = new MethodReference("EndHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
 		var origThis = il.Create(OpCodes.Ldarg, draw.ThisParameter);
 		var a1Op = a1.OpCode; var a1Arg = a1.Operand; var a2Op = a2.OpCode; var a2Arg = a2.Operand;
 		a0.OpCode = OpCodes.Call; a0.Operand = begin;
 		var seq = new[]
 		{
+			il.Create(OpCodes.Brfalse, origThis),
 			il.Create(OpCodes.Ldarg, draw.ThisParameter), Clone(il, a1Op, a1Arg), Clone(il, a2Op, a2Arg),
 			il.Create(OpCodes.Call, drawText), il.Create(OpCodes.Call, end), origThis,
 		};

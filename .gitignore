@@ -24,3 +24,9 @@ godot/icon.png
 godot/src/Engine/Stubs.g.cs.uid
 original/
 godot/video/
+# test build outputs
+tests/**/bin/
+tests/**/obj/
+tests/godot-runtime/.godot/
+tests/godot-runtime/.nuget/
+tests/godot-runtime/nuget.config

@@ -1,0 +1,11 @@
+; Headless runtime test for the SvZ Enhanced frame-pacing code (runs without the game data).
+; tests/run_godot_tests.sh GODOT_DIR
+config_version=5
+
+[application]
+config/name="SvZ FramePacing Test"
+run/main_scene="res://Test.tscn"
+config/features=PackedStringArray("4.7", "C#")
+
+[dotnet]
+project/assembly_name="FramePacingRuntimeTest"

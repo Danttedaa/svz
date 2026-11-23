@@ -240,12 +240,56 @@ internal static class Program
 		PatchTextHalo(module, uiTextRef);
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
+		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
 		if (!Check(output)) throw new PatchException("patched file does not pass the check");
 	}
 
+
+
+	// The original game presents an obsolete incentivized market-rating dialog
+	// at fixed victory waves. Suppress ONLY its platform-type branches within
+	// DebriefingImpl.DisplayStats; leave achievements, coins, new unlocks and
+	// saved profile state untouched. The rating flag is not written to the save.
+	private static void SuppressLegacyRateMePrompt(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		var body = m.Body;
+		body.SimplifyMacros();
+		Require(body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "debrief_victory") &&
+			body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "CoinsGained"),
+			"rating branch must be in debrief stats with victory and coin award logic");
+		var expected = new[] { "amazon", "google" };
+		var matches = body.Instructions.Where(i => Calls(i, "ApplicationUtilities", "IsBuildType")).ToArray();
+		Require(matches.Length == expected.Length,
+			"exactly the amazon and google store-rating checks in DebriefingImpl.DisplayStats");
+		var sources = matches.Select(i => i.Previous?.OpCode == OpCodes.Ldstr ? i.Previous.Operand as string : null).ToArray();
+		Require(sources.SequenceEqual(expected), "rating checks must use literal amazon, google in order");
+		var il = body.GetILProcessor();
+		foreach (var call in matches)
+		{
+			// Original stack: [buildTypeString]; Pop consumes it, Ldc_I4_0
+			// supplies the false result expected by the original branch instruction.
+			call.OpCode = OpCodes.Pop;
+			call.Operand = null;
+			il.InsertAfter(call, il.Create(OpCodes.Ldc_I4_0));
+		}
+		body.OptimizeMacros();
+		Require(LegacyRatingSuppressed(module), "obsolete rating popup not suppressed");
+	}
+
+	private static bool LegacyRatingSuppressed(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		bool HasDisabledCheck(string buildType) => m.Body.Instructions.Any(i =>
+			i.OpCode == OpCodes.Ldstr && (i.Operand as string) == buildType &&
+			i.Next?.OpCode == OpCodes.Pop && i.Next.Next?.OpCode == OpCodes.Ldc_I4_0);
+		return HasDisabledCheck("amazon") && HasDisabledCheck("google") &&
+			!m.Body.Instructions.Any(i => Calls(i, "ApplicationUtilities", "IsBuildType")) &&
+			m.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (i.Operand as string) == "CoinsGained");
+	}
 
 	private static IEnumerable<TypeDefinition> Descendants(IEnumerable<TypeDefinition> types)
 	{
@@ -549,14 +593,19 @@ internal static class Program
 		Require(a0 != null && a0.OpCode == OpCodes.Ldarg && a0.Operand == draw.ThisParameter && IsLoad(a1) && IsLoad(a2),
 			"GuiCanvas._Draw: DrawText(this, local text, sh)");
 		var il = draw.GetILProcessor();
-		// keep a0 as the branch target: it becomes BeginHaloPass, then a duplicate call, EndHaloPass, the original call
-		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
+		// When the optional outline is OFF, skip the entire extra DrawText traversal.
+		// Otherwise the first pass would draw the original glyphs and the second pass would
+		// draw them again, making letters look thicker and wasting GPU draw calls.
+		// Preserve a0 as the original branch target; conditional false jumps to the
+		// untouched regular DrawText invocation.
+		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Boolean, uiText) { HasThis = false };
 		var end = new MethodReference("EndHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
 		var origThis = il.Create(OpCodes.Ldarg, draw.ThisParameter);
 		var a1Op = a1.OpCode; var a1Arg = a1.Operand; var a2Op = a2.OpCode; var a2Arg = a2.Operand;
 		a0.OpCode = OpCodes.Call; a0.Operand = begin;
 		var seq = new[]
 		{
+			il.Create(OpCodes.Brfalse, origThis),
 			il.Create(OpCodes.Ldarg, draw.ThisParameter), Clone(il, a1Op, a1Arg), Clone(il, a2Op, a2Arg),
 			il.Create(OpCodes.Call, drawText), il.Create(OpCodes.Call, end), origThis,
 		};
@@ -576,11 +625,20 @@ internal static class Program
 	private static bool TextHaloPatched(ModuleDefinition module)
 	{
 		var canvas = GuiCanvas(module);
-		bool Calls(MethodDefinition m, string name) => m.Body.Instructions.Any(i => i.OpCode == OpCodes.Call &&
+		bool CallsUi(MethodDefinition m, string name) => m.Body.Instructions.Any(i => i.OpCode == OpCodes.Call &&
 			i.Operand is MethodReference r && r.Name == name && r.DeclaringType.FullName == "Svz.UiText" && r.DeclaringType.Scope.Name == Enh);
 		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
 		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
-		return Calls(drawText, "DrawGlyph") && Calls(draw, "BeginHaloPass") && Calls(draw, "EndHaloPass") &&
+		// The extra pass must be truly optional. Without this branch, disabling
+		// contrast draws every original glyph twice even though it draws no halo.
+		var begin = draw.Body.Instructions.FirstOrDefault(i => Calls(i, "Svz.UiText", "BeginHaloPass"));
+		var skip = begin?.Next;
+		bool guarded = skip != null &&
+			(skip.OpCode == OpCodes.Brfalse || skip.OpCode == OpCodes.Brfalse_S) &&
+			skip.Operand is Instruction target &&
+			draw.Body.Instructions.Contains(target) &&
+			draw.Body.Instructions.SkipWhile(i => i != target).Skip(1).Take(5).Any(i => Calls(i, canvas.FullName, "DrawText"));
+		return CallsUi(drawText, "DrawGlyph") && CallsUi(draw, "BeginHaloPass") && CallsUi(draw, "EndHaloPass") && guarded &&
 			!drawText.Body.Instructions.Any(i => (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
 				i.Operand is MethodReference r && r.Name == "DrawTextureRectRegion");
 	}
@@ -713,6 +771,7 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
+			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

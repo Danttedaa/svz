@@ -13,7 +13,7 @@ namespace Svz
 	/// - Frame-rate target from user://svz_enhanced.cfg (default 120), VSync always on.
 	/// - Android 15+ keeps games at 60 Hz unless they ask for more, and Godot 4.7 does not ask:
 	///   this calls Surface.setFrameRate() on Godot's render surface through the AndroidRuntime bridge.
-	/// - When the display runs at the target rate, VSync alone paces frames (no sleep limiter).
+	/// - Explicit engine limit <=120 FPS even when VSync/display are at 120 Hz.
 	/// - Optional one-way fallback (default 120 -> 60) when the target cannot be held (FallbackMonitor).
 	/// - In-game toggles without touching the game's menus: hold 4 fingers for 1.5 s to switch
 	///   120 <-> 60 FPS, hold 5 fingers for 1.5 s to show/hide the FPS readout.
@@ -155,7 +155,7 @@ namespace Svz
 			}
 		}
 
-		/// Re-read the display rate and switch between VSync pacing and the software limiter if it changed
+		/// Re-read the display rate and update pacing to match the panel while retaining the hard cap
 		/// (the system may refuse the request, or lower the rate later for power or heat).
 		private static void Recheck(string why)
 		{

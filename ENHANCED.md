@@ -293,3 +293,25 @@ Tried and rejected (measured, not shipped):
   was not identified, so it was not shipped.
 - Benchmarks must be interleaved A/B runs: this VM's speed drifted by 2× between runs.
 
+
+## Milestone 12: remove obsolete rating popup; lighter text outlines (draft)
+
+On-device screenshots of v1010 showed the obsolete Glu credit-for-rating
+prompt over the normal victory screen, noisy text halos, and a single 50 FPS
+reading on a Store modal. To improve this without modifying game art or saves:
+
+- **Rating prompt:** `DebriefingImpl.DisplayStats` still invokes the old Android
+  `ApplicationUtilities.IsBuildType("amazon"/"google")` branches on specific
+  victories. The patcher replaces only those two boolean calls with literal
+  false in that method. All other debrief logic (achievements, stat awards,
+  unlocks, cash, saves) is left intact; no permanent profile flag is changed.
+- **Readability:** the earlier eight-copy 1.5-pixel halo around each glyph is
+  reduced to a four-direction, one-pixel outline at 1080p, with slightly
+  less opacity. This preserves source fonts, glyph dimensions, layout and
+  the original character and UI artwork. It cuts extra halo draw calls
+  per glyph from eight to four, although this is not yet a measured FPS gain.
+- Synthetic patched-assembly tests check that the rating prompt is disabled
+  without skipping the reward bookkeeping. Device screenshot QA is needed.
+- Shop scrolling clips partially visible lower rows as they scroll; do not
+  alter the StoreListCell layout or card bounds without validating the full
+  scroll interaction in gameplay.

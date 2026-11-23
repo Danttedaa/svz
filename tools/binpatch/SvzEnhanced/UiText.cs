@@ -7,41 +7,44 @@ namespace Svz
 	/// <summary>
 	/// Readable bitmap-font text for the port (Store, Allies, dialogs, HUD), binary-patch route.
 	///
-	/// Contrast: the patched GuiCanvas draws each GUIText twice. The first pass draws a soft halo: every glyph
-	/// at 8 small offsets from a white, alpha-only copy of its font atlas, tinted warm-light behind dark text
-	/// and dark behind light text. The second pass is the game's normal text. (The atlases carry the glyph
-	/// colour in RGB, so tinting the original atlas could only ever darken it.)
+	/// Optional outline: the patched GuiCanvas can draw an extra contrast halo. On current phones the extra
+	/// strokes can make the legacy stylized glyphs look doubled/hollow, so this is OFF by default. When enabled,
+	/// the first pass draws four cardinal offsets from a white alpha-only atlas; the normal glyphs are
+	/// always drawn in the second pass. Hold 2 fingers for 2 s to compare clean versus outlined text.
 	///
 	/// Size: see <see cref="UiFontQuality"/>. Hold 3 fingers for 2 s to switch between 100 % and 115 % (130 % clips the Store captions).
 	///
 	/// Settings: user://svz_ui.cfg, section [text]: scale (percent of the original text size, 80..150,
-	/// default 100) and contrast (true/false, default true). Created with the defaults on first start.
+	/// default 100) and outline_v2 (true/false, default false). Migrates old auto-enabled contrast to clean mode.
 	/// </summary>
 	public static class UiText
 	{
 		public const string ConfigPath = "user://svz_ui.cfg";
-		public static bool Contrast = true;
+		public static bool Contrast = false;
 		private static bool sHaloPass, sLoaded;
 		private static ulong sOffsetFrame = ulong.MaxValue;
-		private static float sOffset = 1.5f;
+		private static float sOffset = 1f;
 		private static readonly HoldGesture sCycle = new HoldGesture(3, 2.0);
+		private static readonly HoldGesture sToggleOutline = new HoldGesture(2, 2.0);
 
 		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance; }
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
 
-		/// Halo offset in pixels: 1.5 px at 1080 p, never below 1 px.
-		public static float HaloOffset(float screenHeight) => Math.Max(1f, screenHeight / 720f);
+		/// Narrow one-pixel outline at 1080p; avoid obscuring the thin legacy glyph interiors.
+		public static float HaloOffset(float screenHeight) => Math.Max(0.8f, screenHeight / 1080f);
 
 		/// Halo colour for the visible text colour (atlas luminance x modulate); null = no halo.
 		public static Color? HaloColor(Color modulate, float atlasLuminance) =>
 			UiFontQuality.HaloKind(modulate.R, modulate.G, modulate.B, modulate.A, atlasLuminance) switch
 			{
-				1 => new Color(1f, 0.94f, 0.78f, Math.Min(1f, modulate.A * 0.6f)),   // dark text: warm parchment halo
-				-1 => new Color(0f, 0f, 0f, Math.Min(1f, modulate.A * 0.65f)),       // light text: dark halo
+				1 => new Color(1f, 0.96f, 0.85f, Math.Min(1f, modulate.A * 0.55f)),   // dark text: warm parchment halo
+				-1 => new Color(0f, 0f, 0f, Math.Min(1f, modulate.A * 0.55f)),       // light text: dark halo
 				_ => null,
 			};
 
-		public static void BeginHaloPass() { EnsureLoaded(); sHaloPass = Contrast; }
+		/// True only when the extra outline pass should actually draw. The patched GUI
+		/// skips the entire duplicate label traversal when this returns false.
+		public static bool BeginHaloPass() { EnsureLoaded(); sHaloPass = Contrast; return Contrast; }
 		public static void EndHaloPass() => sHaloPass = false;
 
 		/// Replaces CanvasItem.DrawTextureRectRegion in GuiCanvas.DrawText (same arguments, `self` first).
@@ -59,13 +62,16 @@ namespace Svz
 			ulong frame = (ulong)Engine.GetFramesDrawn();
 			if (frame != sOffsetFrame) { sOffsetFrame = frame; sOffset = HaloOffset(ViewHeight(self)); }
 			float o = sOffset;
-			for (int dx = -1; dx <= 1; dx++)
-				for (int dy = -1; dy <= 1; dy++)
-				{
-					if (dx == 0 && dy == 0) continue;
-					var r = new Rect2(rect.Position + new Vector2(dx * o, dy * o), rect.Size);
-					self.DrawTextureRectRegion(atlas.Texture, r, srcRect, halo, transpose, clipUv);
-				}
+			// Four short cardinal strokes replace eight diagonal+cardinal halo draws.
+			// Preserves the original glyph draw pass and text metrics, while halving
+			// halo submissions and avoiding a thick glow that fills glyph interiors.
+			for (int direction = 0; direction < 4; direction++)
+			{
+				float dx = direction == 0 ? -o : direction == 1 ? o : 0f;
+				float dy = direction == 2 ? -o : direction == 3 ? o : 0f;
+				var r = new Rect2(rect.Position + new Vector2(dx, dy), rect.Size);
+				self.DrawTextureRectRegion(atlas.Texture, r, srcRect, halo, transpose, clipUv);
+			}
 		}
 
 		/// White copy of a font atlas that keeps only its alpha (LA8: half the memory of RGBA), plus the
@@ -121,9 +127,11 @@ namespace Svz
 				var cf = new ConfigFile();
 				bool exists = cf.Load(ConfigPath) == Error.Ok;
 				int scale = exists && cf.HasSectionKey("text", "scale") ? cf.GetValue("text", "scale").AsInt32() : (int)Math.Round(UiFontQuality.DefaultTextScale * 100);
-				Contrast = !exists || !cf.HasSectionKey("text", "contrast") || cf.GetValue("text", "contrast").AsBool();
+				// v1012 wrote contrast=true on first run, without an in-game way to turn it off.
+				// Do not carry that implicit legacy default forward. A new key records explicit opt-in.
+				Contrast = exists && cf.HasSectionKey("text", "outline_v2") && cf.GetValue("text", "outline_v2").AsBool();
 				UiFontQuality.TextScale = Math.Clamp(scale, (int)(UiFontQuality.MinTextScale * 100), (int)(UiFontQuality.MaxTextScale * 100)) / 100f;
-				if (!exists) Save();
+				if (!exists || !cf.HasSectionKey("text", "outline_v2")) Save();
 				FramePacing.AfterFrame += OnFrame;
 				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, contrast {(Contrast ? "on" : "off")}");
 			}
@@ -137,12 +145,21 @@ namespace Svz
 		{
 			var cf = new ConfigFile();
 			cf.SetValue("text", "scale", (int)Math.Round(UiFontQuality.TextScale * 100));
-			cf.SetValue("text", "contrast", Contrast);
+			cf.SetValue("text", "contrast", Contrast); // compatibility if rolling back to v1012
+			cf.SetValue("text", "outline_v2", Contrast);
 			cf.Save(ConfigPath);
 		}
 
 		private static void OnFrame(double delta, int touchCount)
 		{
+			// A/B on the SAME phone/build isolates halo overdraw from HD glyph atlas issues.
+			if (sToggleOutline.Update(touchCount, delta))
+			{
+				Contrast = !Contrast;
+				Save();
+				FramePacing.Notify(Contrast ? "Text outline ON" : "Text outline OFF");
+				GD.Print($"[svz-ui] text outline {(Contrast ? "on" : "off")}");
+			}
 			if (!sCycle.Update(touchCount, delta)) return;
 			int next = UiFontQuality.NextScaleStep((int)Math.Round(UiFontQuality.TextScale * 100));
 			UiFontQuality.SetTextScale(next / 100f);

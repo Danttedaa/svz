@@ -32,9 +32,11 @@ internal static class Program
 	private static void Decide()
 	{
 		var d = FramePacingPolicy.Decide(120, 120.0, true);
-		Check(d.EngineMaxFps == 0 && d.VsyncPaced && d.RequestHz == 120f, "120 on 120 Hz: VSync paced, no limiter");
+		Check(d.EngineMaxFps == 120 && d.VsyncPaced && d.RequestHz == 120f, "120 on 120 Hz: VSync with a hard 120 FPS cap");
 		d = FramePacingPolicy.Decide(120, 119.88, true);
-		Check(d.VsyncPaced, "119.88 Hz counts as 120");
+		Check(d.VsyncPaced && d.EngineMaxFps == 120, "119.88 Hz counts as 120 while cap remains 120");
+		d = FramePacingPolicy.Decide(240, 240.0, true);
+		Check(d.EngineMaxFps == 120 && d.RequestHz == 120f && !d.VsyncPaced, "caller requesting 240 cannot bypass the 120 cap");
 		d = FramePacingPolicy.Decide(120, 60.0, true);
 		Check(d.EngineMaxFps == 120 && !d.VsyncPaced && d.RequestHz == 120f, "120 on 60 Hz: limiter on, request 120");
 		d = FramePacingPolicy.Decide(60, 120.0, true);

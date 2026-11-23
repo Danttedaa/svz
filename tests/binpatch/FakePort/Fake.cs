@@ -253,3 +253,26 @@ namespace Svz
 		}
 	}
 }
+
+
+// Stand-in for the two obsolete market-rating branches in DebriefingImpl.
+// This remains a synthetic behaviour test and contains no original game code.
+public static class ApplicationUtilities
+{
+	public static bool IsBuildType(string build) => build == "google";
+}
+public sealed class DebriefingImpl
+{
+	public int RewardChecks { get; private set; }
+	public int RatingPrompts { get; private set; }
+	private void DisplayStats()
+	{
+		RewardChecks++;
+		if (ApplicationUtilities.IsBuildType("amazon")) RatingPrompts++;
+		else if (ApplicationUtilities.IsBuildType("google")) RatingPrompts++;
+		// Original victory statistics and coin bookkeeping must still execute.
+		string label = "debrief_victory";
+		string eventName = "CoinsGained";
+		if (label.Length > 0 && eventName.Length > 0) RewardChecks++;
+	}
+}

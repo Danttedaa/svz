@@ -171,7 +171,7 @@ public partial class Test : Node
 		Check(FramePacing.EffectiveFps == 60 && FramePacing.Settings.TargetFps == 120, "fallback lowers effective rate only");
 		Check(Engine.MaxFps == 60, "fallback caps engine at 60");
 		Check(Cfg("target_fps").AsInt32() == 120, "fallback is not saved (session only)");
-		Check(mNotes.Exists(n => n.Contains("could not hold 120")), "player notified of fallback");
+		Check(mNotes.Exists(n => n.Contains("target 120 not held")), "player notified of fallback");
 
 		// game's own targetFrameRate request must not override the player
 		FramePacing.GameRequested(30);

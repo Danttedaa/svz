@@ -10,8 +10,10 @@
 #   1. normal start (intro): app runs, SvzEnhanced.dll loaded, game data loaded
 #   2. Store opened directly (--level=3): the text patches run (fonts, contrast halo)
 #   3. battle opened directly (--level=2 --killall=25): skinning, animation blending, death and corpse code
-# Stages 2-3 pass the game's own debug command line through Godot's "command_line_params" intent extra.
-# If the build ignores it, they are reported as WARN (not exercised), never as PASS.
+# Stages 2-3 need the game's debug command line (--level=N). Godot ignores command-line extras sent to its
+# exported launcher activity, so these stages install emulator-only VARIANTS of the APK whose packaged
+# command line (assets/_cl_) has the arguments appended, signed with a throwaway key (smoke_variant.py).
+# The published APK is not changed. If a variant cannot be built, the stage is WARN (not exercised).
 set -uo pipefail
 apk="$1"; pkg="$2"; out="$3"; wait_s="${4:-60}"
 mkdir -p "$out"
@@ -28,11 +30,38 @@ check_errors() {   # stage logfile
   [ "$n" = 0 ] || note "$1: $n '[svz] exception in' lines (first: $(grep -m1 '\[svz\] exception in' "$2" | cut -c1-200))"
 }
 
-launch_level() {   # stage level extra-args seconds
-  local stage="$1" level="$2" extra="$3" secs="$4" log="$out/logcat-$1.txt"
-  adb shell am force-stop "$pkg"
+here="$(cd "$(dirname "$0")" && pwd)"
+bt=$(ls -d "${ANDROID_HOME:-/nonexistent}"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+vkey="$out/variant-key.p12"
+
+make_variant() {   # stage args... -> prints the signed variant path
+  local stage="$1"; shift
+  local unsigned="$out/variant-$stage-unsigned.apk" aligned="$out/variant-$stage-aligned.apk" signed="$out/variant-$stage.apk"
+  [ -n "$bt" ] && [ -x "${bt}apksigner" ] && [ -x "${bt}zipalign" ] || return 1
+  if [ ! -f "$vkey" ]; then
+    keytool -genkeypair -keystore "$vkey" -storetype PKCS12 -storepass smoke-only -keypass smoke-only -alias smoke \
+      -dname "CN=emulator smoke test only" -keyalg RSA -keysize 2048 -validity 2 > /dev/null 2>&1 || return 1
+  fi
+  python3 -I "$here/smoke_variant.py" "$apk" "$unsigned" -- "$@" >> "$out/details.txt" 2>&1 || return 1
+  "${bt}zipalign" -p -f 4 "$unsigned" "$aligned" > /dev/null || return 1
+  "${bt}apksigner" sign --ks "$vkey" --ks-pass pass:smoke-only --ks-key-alias smoke --out "$signed" "$aligned" > /dev/null 2>&1 || return 1
+  rm -f "$unsigned" "$aligned" "$signed.idsig"
+  echo "$signed"
+}
+
+launch_level() {   # stage level seconds args...
+  local stage="$1" level="$2" secs="$3"; shift 3
+  local log="$out/logcat-$stage.txt" variant
+  if ! variant=$(make_variant "$stage" "$@"); then
+    warn+=("$stage: could not build the emulator test variant, stage not exercised"); return 1
+  fi
+  adb uninstall "$pkg" > /dev/null 2>&1
+  if ! adb install -r --no-incremental "$variant" > "$out/install-$stage.txt" 2>&1; then
+    warn+=("$stage: test variant did not install: $(tail -1 "$out/install-$stage.txt")"); rm -f "$variant"; return 1
+  fi
+  rm -f "$variant"
   adb logcat -c
-  adb shell am start -n "$component" --esa command_line_params "--,--level=$level$extra" > "$out/start-$stage.txt" 2>&1
+  adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
   sleep "$secs"
   local pid; pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot-$stage.png" 2>/dev/null || rm -f "$out/screenshot-$stage.png"
@@ -43,7 +72,7 @@ launch_level() {   # stage level extra-args seconds
     note "$stage: level $level loaded"
     return 0
   fi
-  warn+=("$stage: level $level was not opened (command_line_params ignored?), stage not exercised")
+  warn+=("$stage: level $level was not opened, stage not exercised")
   return 1
 }
 
@@ -65,16 +94,14 @@ else
   check_errors start "$out/logcat.txt"
   grep "\[svz-fps\]\|\[svz\] data:\|\[svz\] level" "$out/logcat.txt" | sed 's/^.*\(\[svz\)/\1/' | head -20 >> "$out/details.txt"
 
-  component=$(adb shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER "$pkg" | tr -d '\r' | tail -1)
-  note "launcher activity: $component"
-  if [ -n "$component" ] && [ "${#fail[@]}" -eq 0 ]; then
+  if [ "${#fail[@]}" -eq 0 ]; then
     # stage 2: Store (fonts + contrast halo)
-    if launch_level store 3 "" 40; then
+    if launch_level store 3 45 --level=3; then
       grep -q "\[svz-ui\] text scale" "$out/logcat-store.txt" && note "store: text settings loaded ($(grep -m1 -o '\[svz-ui\].*' "$out/logcat-store.txt"))" \
         || warn+=("store: no [svz-ui] line (no GUI text drawn?)")
     fi
     # stage 3: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
-    if launch_level battle 2 ",--killall=25" 50; then
+    if launch_level battle 2 60 --level=2 --killall=30; then
       grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"
       grep -o "\[svz-death\].*" "$out/logcat-battle.txt" | head -3 | sed 's/^/battle: /' >> "$out/details.txt"

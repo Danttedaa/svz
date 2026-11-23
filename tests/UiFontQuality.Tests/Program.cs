@@ -94,6 +94,26 @@ internal static class Test
 		Ok(UiFontQuality.HaloKind(1f, 1f, 1f, 0f, 1f) == 0 && UiFontQuality.HaloKind(1, 1, 1, float.NaN, 1) == 0, "invisible text: no halo");
 		Ok(UiFontQuality.NextScaleStep(100) == 115 && UiFontQuality.NextScaleStep(115) == 100 && UiFontQuality.NextScaleStep(130) == 100, "gesture steps");
 
-		Console.WriteLine($"[test] {passed} HD font selection and scaling assertions passed");
+		// Small glyphs on a 708px landscape display are eligible; untouched large
+		// banners, colored atlases and colored reward labels are not.
+		Ok(UiInkPolicy.InkKind(19, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 1,
+			"dark small glyph: solid dark ink");
+		Ok(UiInkPolicy.InkKind(19, 708, 0.88f, 0.01f, 1, 1, 1, 1) == -1,
+			"light small glyph: solid light ink");
+		Ok(UiInkPolicy.InkKind(58, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 0,
+			"decorative heading remains original");
+		Ok(UiInkPolicy.InkKind(19, 708, 0.18f, 0.5f, 1, 1, 1, 1) == 0,
+			"colorful atlas remains original");
+		Ok(UiInkPolicy.InkKind(19, 708, 0.18f, 0.02f, 1, 0, 0, 1) == 0,
+			"red material color remains original");
+		Ok(UiInkPolicy.InkKind(19, 708, 0.18f, 0.02f, 1, 1, 1, 0) == 0,
+			"transparent text remains invisible");
+		Ok(UiInkPolicy.InkKind(float.NaN, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 0,
+			"invalid dimensions always preserve original");
+		Ok(UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Original &&
+			UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.Outlined &&
+			UiInkPolicy.NextMode(UiInkPolicy.Outlined) == UiInkPolicy.Solid,
+			"gesture cycles solid, original and outline without losing modes");
+		Console.WriteLine($"[test] {passed} HD font selection and small-text clarity assertions passed");
 	}
 }

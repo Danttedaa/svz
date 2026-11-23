@@ -13,7 +13,7 @@ import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PUBLIC_WORKFLOWS = sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")))
-PRIVATE_WORKFLOW = os.path.join(ROOT, "ci", "private", "build-apk.yml")
+PRIVATE_WORKFLOW = os.path.join(ROOT, "ci", "private", "repo", ".github", "workflows", "build-apk.yml")
 PRIVATE_GUARD = "github.event.repository.private != true"
 
 try:
@@ -96,9 +96,15 @@ class PrivateWorkflow(unittest.TestCase):
             self.assertNotIn("secrets.", st.get("run", ""), st.get("name"))
 
     def test_original_checked_and_cleaned(self):
-        self.assertIn("sha256sum -c", self.text)
+        self.assertIn("ci/config.py\" check-original", self.text)
+        self.assertIn("apksigner\" verify --print-certs", self.text)
         self.assertIn("SVZ_EXPECT_CERT_SHA256", self.text)
-        self.assertRegex(self.text, r"if: always\(\)\n\s+run: rm -rf engine/keys engine/original")
+        self.assertIn('rm -rf "$RUNNER_TEMP/key" "$RUNNER_TEMP/original"', self.text)
+
+    def test_key_only_from_secret_and_never_replaced(self):
+        self.assertIn("bash ci/signing.sh generate", self.text)
+        self.assertIn("a new key would break updates", self.text)
+        self.assertNotIn("upload-artifact", self.text)  # nothing from a private build leaves as an artifact
 
 
 class NoGameFilesCommitted(unittest.TestCase):

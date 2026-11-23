@@ -1,0 +1,241 @@
+# SvZ Enhanced: private APK build (phone-first setup). Lives in a PRIVATE repository.
+#
+# Settings: svz-build.json (committed). The only secret: SVZ_KEY_PASSPHRASE (>= 20 characters, from your
+# password manager). Input: a release named "original" with the original game (APK, plus OBB if needed),
+# uploaded once from any browser.
+#
+# What a run does
+#   1. stops unless this repository is private
+#   2. signing key: creates it on the first run (only if none exists and none is pinned), stores it ONLY
+#      encrypted (signing/release-key.p12.enc) and pins its certificate in svz-build.json; later runs decrypt
+#      it and refuse any other certificate
+#   3. original game: downloads release "original", checks it is Samurai vs Zombies Defense 3.4.x with game
+#      data and a valid signature; pins its SHA-256 on first use, later runs refuse any other file
+#   4. builds the engine commit (svz-build.json: engine_repo/engine_ref) with the engine's Nix toolchain,
+#      verifies the APK, publishes it as a release of THIS repository, keeps the newest keep_builds builds
+#   5. reports to the issue "Build status" (readable on the phone)
+# Triggers: push (config/workflow changes), the "original" release being published, daily (only when the
+# engine has a new commit), manual, repository_dispatch from the public repo.
+name: Build SvZ Enhanced APK
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [engine-updated]
+
+permissions:
+  contents: write   # releases, pins
+  issues: write     # "Build status" issue
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  KEYFILE: signing/release-key.p12.enc
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Refuse to run in a public repository
+        if: ${{ github.event.repository.private != true }}
+        run: |
+          echo "::error::This workflow handles the original game and the signing key. Private repositories only."
+          exit 1
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Configuration
+        id: cfg
+        run: |
+          python3 -I ci/config.py validate
+          for k in engine_repo engine_ref package app_name version_code_base keep_builds; do
+            echo "$k=$(python3 -I ci/config.py get $k)" >> "$GITHUB_OUTPUT"
+          done
+          git config user.name "svz-build"
+          git config user.email "svz-build@users.noreply.github.com"
+          echo "# SvZ Enhanced build ${{ github.run_number }}" > "$RUNNER_TEMP/status.md"
+
+      - name: Signing key
+        id: key
+        env:
+          SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+        run: |
+          pinned=$(python3 -I ci/config.py get cert_sha256)
+          if [ -z "$SVZ_KEY_PASSPHRASE" ]; then
+            echo "- ⏳ **Waiting for you:** add the secret \`SVZ_KEY_PASSPHRASE\` (Settings → Secrets and variables → Actions)." >> "$RUNNER_TEMP/status.md"
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ ! -f "$KEYFILE" ]; then
+            if [ -n "$pinned" ]; then
+              echo "::error::$KEYFILE is missing but a certificate is pinned. Restore the file from your backup; a new key would break updates."
+              echo "- ❌ Signing key file missing although a key is pinned: restore \`$KEYFILE\` from your backup." >> "$RUNNER_TEMP/status.md"
+              exit 1
+            fi
+            fp=$(bash ci/signing.sh generate "$KEYFILE")
+            python3 -I ci/config.py set cert_sha256 "$fp"
+            git add "$KEYFILE" svz-build.json
+            git commit -q -m "Create release signing key (encrypted) and pin its certificate"
+            git push -q
+            echo "- 🔑 Created your release signing key (stored encrypted in \`$KEYFILE\`). **Back it up:** download that file and keep it with the passphrase in your password manager." >> "$RUNNER_TEMP/status.md"
+            pinned="$fp"
+          fi
+          (umask 077; mkdir -p "$RUNNER_TEMP/key")
+          got=$(bash ci/signing.sh decrypt "$KEYFILE" "$RUNNER_TEMP/key/release.p12") || {
+            echo "- ❌ Could not decrypt the signing key: is \`SVZ_KEY_PASSPHRASE\` the passphrase it was created with?" >> "$RUNNER_TEMP/status.md"; exit 1; }
+          [ "$got" = "$pinned" ] || { echo "::error::signing key certificate $got != pinned $pinned"; exit 1; }
+          echo "- ✅ Signing key OK (certificate \`${got:0:16}…\`)" >> "$RUNNER_TEMP/status.md"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "cert=$got" >> "$GITHUB_OUTPUT"
+
+      - name: Original game files (release "original")
+        id: orig
+        if: steps.key.outputs.ready == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/original"
+          if ! gh release view original --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "- ⏳ **Waiting for you:** create a release with tag \`original\` and attach the original APK (and OBB if it has one)." >> "$RUNNER_TEMP/status.md"
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh release download original --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/original"
+          cd "$RUNNER_TEMP/original"
+          for x in *.xapk; do  # APKPure-style bundle: a zip holding the APK and Android/obb/...
+            [ -f "$x" ] || continue
+            mkdir -p xapk && unzip -q -o "$x" -d xapk && find xapk -name '*.apk' -exec mv {} . \; && find xapk -name '*.obb' -exec mv {} . \;
+          done
+          apks=(*.apk); obbs=(*.obb)
+          [ -f "${apks[0]}" ] && [ ${#apks[@]} = 1 ] || { echo "- ❌ Release \`original\` must contain exactly one APK (found: ${apks[*]})." >> "$RUNNER_TEMP/status.md"; exit 1; }
+          apk="$PWD/${apks[0]}"; obb=""; [ -f "${obbs[0]}" ] && obb="$PWD/${obbs[0]}"
+          python3 -m pip install --quiet --user androguard==4.1.4
+          sha=$(python3 -I "$GITHUB_WORKSPACE/ci/config.py" check-original "$apk" $obb 2> notes.txt) || {
+            echo "- ❌ The original does not look right: $(tail -1 notes.txt)" >> "$RUNNER_TEMP/status.md"; exit 1; }
+          # signature: valid, and the signer's certificate is recorded
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$apksigner" verify --print-certs "$apk" > sig.txt 2>&1 || { echo "- ❌ The original APK's signature does not verify (modified file?)." >> "$RUNNER_TEMP/status.md"; exit 1; }
+          signer=$(grep -m1 'certificate DN' sig.txt | sed 's/.*DN: //'); signer_sha=$(grep -m1 'certificate SHA-256' sig.txt | sed 's/.*digest: //')
+          cd "$GITHUB_WORKSPACE"
+          pinned=$(python3 -I ci/config.py get original_sha256)
+          if [ -z "$pinned" ]; then
+            python3 -I ci/config.py set original_sha256 "$sha"
+            git add svz-build.json && git commit -q -m "Pin the original APK (SHA-256 $sha)" && git push -q
+            pinned="$sha"
+          fi
+          [ "$sha" = "$pinned" ] || { echo "- ❌ The original APK changed (SHA-256 $sha, pinned $pinned). If intended, clear original_sha256 in svz-build.json." >> "$RUNNER_TEMP/status.md"; exit 1; }
+          {
+            echo "- ✅ Original: $(grep -h '^note:' "$RUNNER_TEMP/original/notes.txt" | sed 's/note: //' | paste -sd ', '), SHA-256 \`${sha:0:16}…\`"
+            echo "  - signed by: $signer (certificate SHA-256 \`${signer_sha:0:16}…\`)"
+            [ -z "$obb" ] || echo "  - OBB: $(basename "$obb") (OBB files are not signed; only its consistency is checked)"
+          } >> "$RUNNER_TEMP/status.md"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"; echo "obb=$obb" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Engine commit
+        id: engine
+        if: steps.orig.outputs.ready == 'true'
+        env:
+          REPO: ${{ steps.cfg.outputs.engine_repo }}
+          REF: ${{ github.event.client_payload.ref || steps.cfg.outputs.engine_ref }}
+        run: |
+          sha=$(git ls-remote "https://github.com/$REPO" "refs/heads/$REF" "refs/tags/$REF^{}" "refs/tags/$REF" | head -1 | cut -f1)
+          if [ -z "$sha" ] && [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then sha="$REF"; fi
+          [ -n "$sha" ] || { echo "- ❌ Cannot find engine $REPO@$REF" >> "$RUNNER_TEMP/status.md"; exit 1; }
+          short=${sha:0:12}
+          built=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -c -- "-$short\$" || true)
+          skip=false; [ "${{ github.event_name }}" = schedule ] && [ "$built" != 0 ] && skip=true
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"; echo "short=$short" >> "$GITHUB_OUTPUT"; echo "ref=$REF" >> "$GITHUB_OUTPUT"; echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          [ "$skip" = false ] || echo "- ✅ Engine $REPO@$short is already built; nothing to do." >> "$RUNNER_TEMP/status.md"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        with:
+          repository: ${{ steps.cfg.outputs.engine_repo }}
+          ref: ${{ steps.engine.outputs.sha }}
+          path: engine
+          persist-credentials: false
+
+      - name: Free disk space
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Build signed arm64 APK
+        id: build
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        working-directory: engine
+        env:
+          SVZ_KEYSTORE_ALIAS: svz
+          SVZ_KEYSTORE_PASSWORD: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+          SVZ_EXPECT_CERT_SHA256: ${{ steps.key.outputs.cert }}
+          APK: ${{ steps.orig.outputs.apk }}
+          OBB: ${{ steps.orig.outputs.obb }}
+          PACKAGE: ${{ steps.cfg.outputs.package }}
+          APP_NAME: ${{ steps.cfg.outputs.app_name }}
+        run: |
+          mkdir -p keys original
+          cp "$RUNNER_TEMP/key/release.p12" keys/svz.jks   # present before `nix develop`, so the shell creates no key
+          export SVZ_KEYSTORE="$PWD/keys/svz.jks"
+          vc=$(( ${{ steps.cfg.outputs.version_code_base }} + ${{ github.run_number }} ))
+          echo "version_code=$vc" >> "$GITHUB_OUTPUT"
+          args=(--apk "$APK"); [ -z "$OBB" ] || args+=(--obb "$OBB")
+          nix develop -c tools/build.sh --platform android "${args[@]}" --package "$PACKAGE" --app-name "$APP_NAME" \
+            --version-code "$vc" --version-name "enhanced-${{ steps.engine.outputs.short }}"
+
+      - name: Verify and publish (this private repository only)
+        if: steps.build.outcome == 'success'
+        working-directory: engine
+        env:
+          PACKAGE: ${{ steps.cfg.outputs.package }}
+          CERT: ${{ steps.key.outputs.cert }}
+          VC: ${{ steps.build.outputs.version_code }}
+          SHORT: ${{ steps.engine.outputs.short }}
+          KEEP: ${{ steps.cfg.outputs.keep_builds }}
+        run: |
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)apksigner
+          [ -x "$apksigner" ] || apksigner=$(nix develop -c printenv ANDROID_HOME | tail -1)/build-tools/35.0.0/apksigner
+          python3 -I tools/verify/verify_apk.py build/svz.apk --require-abi arm64-v8a --expect-package "$PACKAGE" \
+            --min-version-code "$VC" --forbid-permission android.permission.INTERNET --expect-cert-sha256 "$CERT" \
+            --check-bridge --apksigner "$apksigner" --json build/verify.json
+          apk="SvZ-Enhanced-$VC-$SHORT.apk"; mv build/svz.apk "build/$apk"
+          python3 -I -c "import json; [print(f\"- {'✅' if r['passed'] else '❌'} {r['check']}: {r['detail']}\") for r in json.load(open('build/verify.json'))['results']]" > build/checks.md
+          { echo "Private build of engine \`${{ steps.engine.outputs.ref }}\` @ \`$SHORT\`, versionCode $VC."
+            echo; echo "Install over the previous build: it keeps your save game."; echo; cat build/checks.md
+            echo; echo "Not verified by CI: running on a phone and 120 FPS."; } > build/notes.md
+          tag="apk-r${{ github.run_number }}-$SHORT"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "SvZ Enhanced $VC ($SHORT)" --notes-file build/notes.md "build/$apk" build/verify.json
+          echo "- 📦 **New APK:** release \`$tag\` → \`$apk\` (Releases of this repository)" >> "$RUNNER_TEMP/status.md"
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | tail -n +$(( KEEP + 1 )) | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+
+      - name: Report to the "Build status" issue
+        if: always()
+        env:
+          SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          s="$RUNNER_TEMP/status.md"
+          [ "${{ job.status }}" = success ] || {
+            echo "- ❌ Run failed. Last lines of the build log:"; echo '```'
+            tail -40 engine/build/export-android.log 2>/dev/null || echo "(no export log)"; echo '```'; } >> "$s"
+          echo "" >> "$s"; echo "[Run log]($RUN_URL) · $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$s"
+          python3 -I -c "import os,sys; p=os.environ.get('SVZ_KEY_PASSPHRASE',''); t=open(sys.argv[1]).read(); open(sys.argv[1],'w').write(t.replace(p,'***') if p else t)" "$s"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search 'in:title "Build status"' --json number --jq '.[0].number // empty')
+          if [ -z "$n" ]; then gh issue create --repo "$GITHUB_REPOSITORY" --title "Build status" --body-file "$s" >/dev/null
+          else gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body-file "$s" >/dev/null; fi
+
+      - name: Remove key and original from the runner
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/key" "$RUNNER_TEMP/original" engine/keys engine/original engine/work

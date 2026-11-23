@@ -1,0 +1,10 @@
+{
+  "engine_repo": "Danttedaa/svz",
+  "engine_ref": "enhanced/m1-frame-pacing",
+  "package": "io.github.danttedaa.svz",
+  "app_name": "SvZ Enhanced",
+  "version_code_base": 1000,
+  "keep_builds": 5,
+  "original_sha256": "",
+  "cert_sha256": ""
+}

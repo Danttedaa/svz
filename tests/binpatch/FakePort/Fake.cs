@@ -3,7 +3,16 @@ using Godot;
 
 namespace UnityEngine
 {
-	public sealed class Time { internal static float __smoothDt = 1f / 30f, __dt; }
+	public sealed class Time { internal static float __smoothDt = 1f / 30f, __dt, __time; public static float time => __time; }
+	// Stand-in with the port's AnimationClip.length shape (cached curve length); no game data.
+	public sealed class AnimationEvent { internal float __time; }
+	public sealed class AnimationClip
+	{
+		internal float __length = -1f;
+		internal readonly System.Collections.Generic.List<float> __tracks = new();
+		internal readonly System.Collections.Generic.List<AnimationEvent> __events = new();
+		public float length => __length >= 0 ? __length : (__length = __tracks.Count == 0 ? 0f : System.Linq.Enumerable.Max(__tracks));
+	}
 	public struct Mathf { public static float Lerp(float a, float b, float t) => a + (b - a) * t; public static int Abs(int x) => Math.Abs(x); }
 	public sealed class Screen { public static int height => 1080; }
 	public sealed class Input { public static int touchCount => 0; }

@@ -84,6 +84,8 @@ fi
 if dotnet "$bp/SvzPatch/SvzPatch.dll" check "$bp/FakePort/SvZPort.dll" > /dev/null; then
   echo "FAIL: unpatched input passed the check"; exit 1
 fi
-echo "binpatch OK (patched, check + resolution passed, double patch refused)"
+mkdir -p "$bp/run" && cp "$bp/patched.dll" "$bp/run/SvZPort.dll" && cp "$bp/SvzEnhanced/SvzEnhanced.dll" "$godot_dir/GodotSharp/Api/Release/GodotSharp.dll" "$bp/run/"
+dotnet run --project "$here/binpatch/Behavior" -- "$bp/run"
+echo "binpatch OK (patched, check + resolution passed, behaviour verified, double patch refused)"
 rm -rf "$bp"
 

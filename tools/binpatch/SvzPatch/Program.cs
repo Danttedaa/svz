@@ -78,17 +78,23 @@ internal static class Program
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
-		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitRealSeconds" && x.IsPublic && x.IsStatic &&
-			x.Parameters.Count == 1 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
+		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
+			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
+			x.Parameters[1].ParameterType.FullName == "System.Object" &&
 			x.ReturnType.FullName == "System.Collections.IEnumerator");
-		Require(victoryMethod != null, "VictoryTiming.WaitRealSeconds(float) must return IEnumerator");
+		Require(victoryMethod != null, "VictoryTiming.WaitAfterWin(float,object) must return IEnumerator");
 		var death = enhanced.GetType("Svz.DeathCleanup") ?? throw new PatchException("Svz.DeathCleanup missing");
 		var deathMethod = death.Methods.SingleOrDefault(x => x.Name == "ShouldRemove" && x.IsPublic && x.IsStatic &&
-			x.Parameters.Count == 3 && x.Parameters[0].ParameterType.FullName == "System.Object" &&
+			x.Parameters.Count == 4 && x.Parameters[0].ParameterType.FullName == "System.Object" &&
 			x.Parameters[1].ParameterType.FullName == "System.Boolean" &&
 			x.Parameters[2].ParameterType.FullName == "System.Single" &&
+			x.Parameters[3].ParameterType.FullName == "System.Single" &&
 			x.ReturnType.FullName == "System.Boolean");
-		Require(deathMethod != null, "DeathCleanup.ShouldRemove(object,bool,float) required");
+		Require(deathMethod != null, "DeathCleanup.ShouldRemove(object,bool,float,float) required");
+		var animFixes = enhanced.GetType("Svz.AnimationFixes") ?? throw new PatchException("Svz.AnimationFixes missing");
+		Require(animFixes.Methods.Any(x => x.Name == "ClipLength" && x.IsPublic && x.IsStatic && x.Parameters.Count == 2 &&
+			x.Parameters[0].ParameterType.FullName == "System.Single" && x.Parameters[1].ParameterType.FullName == "System.Object" &&
+			x.ReturnType.FullName == "System.Single"), "AnimationFixes.ClipLength(float,object) required");
 		var fonts = enhanced.GetType("Svz.UiFontQuality") ?? throw new PatchException("Svz.UiFontQuality missing");
 		Require(fonts.Methods.Any(x => x.Name == "SelectResolution" && x.IsStatic && x.IsPublic &&
 			x.Parameters.Count == 2 && x.ReturnType.FullName == "System.String" &&
@@ -107,6 +113,7 @@ internal static class Program
 		var victoryRef = new TypeReference("Svz", "VictoryTiming", module, asmRef);
 		var deathRef = new TypeReference("Svz", "DeathCleanup", module, asmRef);
 		var fontRef = new TypeReference("Svz", "UiFontQuality", module, asmRef);
+		var animFixRef = new TypeReference("Svz", "AnimationFixes", module, asmRef);
 		var ts = module.TypeSystem;
 		var nodeRef = ExistingTypeRef(module, "Godot.Node");
 		var actionOpen = module.GetTypeReferences().FirstOrDefault(t => t.FullName == "System.Action`1");
@@ -131,8 +138,9 @@ internal static class Program
 		var gameRequested = M(fpRef, "GameRequested", ts.Void, ts.Int32);
 		var effectiveFps = M(fpRef, "get_EffectiveFps", ts.Int32);
 		var smooth = M(polRef, "SmoothDeltaTime", ts.Single, ts.Single, ts.Single);
-		var realtimeWait = M(victoryRef, "WaitRealSeconds", ExistingTypeRef(module, "System.Collections.IEnumerator"), ts.Single);
-		var shouldRemove = M(deathRef, "ShouldRemove", ts.Boolean, ts.Object, ts.Boolean, ts.Single);
+		var realtimeWait = M(victoryRef, "WaitAfterWin", ExistingTypeRef(module, "System.Collections.IEnumerator"), ts.Single, ts.Object);
+		var shouldRemove = M(deathRef, "ShouldRemove", ts.Boolean, ts.Object, ts.Boolean, ts.Single, ts.Single);
+		var clipLength = M(animFixRef, "ClipLength", ts.Single, ts.Single, ts.Object);
 		var fontChoose = Method(module, "FontSetFinder", "AutoFindClosestResolutionFolderPath", 1);
 		Require(fontChoose.Parameters[0].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32>",
 			"FontSetFinder list parameter");
@@ -226,6 +234,7 @@ internal static class Program
 		PatchStuckCorpses(module, shouldRemove);
 		PatchFontSelection(module, fontSelect, screenHeight);
 		PatchSnapshots(module, asmRef);
+		PatchClipLength(module, clipLength);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -264,7 +273,7 @@ internal static class Program
 			i.OpCode == OpCodes.Call && i.Operand is MethodReference m &&
 			m.DeclaringType.FullName == "Svz.VictoryTiming" &&
 			m.DeclaringType.Scope.Name == Enh &&
-			m.Name == "WaitRealSeconds").ToArray();
+			(m.Name == "WaitAfterWin" || m.Name == "WaitRealSeconds")).ToArray();
 		return waits.Length == 1 && !move.Body.Instructions.Any(IsWinWait);
 	}
 
@@ -290,6 +299,13 @@ internal static class Program
 		// Replace the yield expression with a nested IEnumerator that measures
 		// real elapsed time; CoroutineRunner.Step handles nested IEnumerators.
 		var call = waits[0];
+		// M9: also pass the InGameImpl (the iterator's <>4__this) so the one-time wave-70 story ending
+		// keeps its configured display time. Stack: [seconds] -> [seconds, game].
+		var self = move.DeclaringType.Fields.SingleOrDefault(f => f.Name == "<>4__this" && f.FieldType.Name == "InGameImpl");
+		Require(self != null, "PostWinDelay iterator has <>4__this of type InGameImpl");
+		var il = body.GetILProcessor();
+		il.InsertBefore(call, il.Create(OpCodes.Ldarg_0));
+		il.InsertBefore(call, il.Create(OpCodes.Ldfld, self));
 		call.OpCode = OpCodes.Call;
 		call.Operand = realtimeWait;
 		body.OptimizeMacros();
@@ -312,6 +328,7 @@ internal static class Program
 			"dying-character isOver getter receiver is a local variable");
 		var character = (VariableDefinition)call.Previous.Operand;
 		var healthGetter = module.ImportReference(Method(module, "Character", "get_health", 0));
+		var gameTime = module.ImportReference(Method(module, "UnityEngine.Time", "get_time", 0));
 		var il = body.GetILProcessor();
 		// Existing stack: [character] before isOver; preserve it for ShouldRemove.
 		il.InsertBefore(call, il.Create(OpCodes.Dup));
@@ -319,7 +336,9 @@ internal static class Program
 		il.InsertAfter(call, load);
 		var health = il.Create(OpCodes.Callvirt, healthGetter);
 		il.InsertAfter(load, health);
-		il.InsertAfter(health, il.Create(OpCodes.Call, hook));
+		var time = il.Create(OpCodes.Call, gameTime);
+		il.InsertAfter(health, time);
+		il.InsertAfter(time, il.Create(OpCodes.Call, hook));
 		body.OptimizeMacros();
 		Require(StuckCorpsesPatched(module), "dying-character cleanup gate not patched");
 	}
@@ -426,6 +445,43 @@ internal static class Program
 		});
 
 
+	// Root cause of frozen corpses: UnityEngine.AnimationClip.get_length returns 0 for a clip with events
+	// but no curves. Pass every returned value through AnimationFixes.ClipLength(value, this).
+	private static void PatchClipLength(ModuleDefinition module, MethodReference hook)
+	{
+		var get = Method(module, "UnityEngine.AnimationClip", "get_length", 0);
+		Require(get.ReturnType.FullName == "System.Single", "AnimationClip.length returns float");
+		Require(get.Body.Instructions.Any(i => (i.OpCode == OpCodes.Ldfld || i.OpCode == OpCodes.Stfld) &&
+			i.Operand is FieldReference f && f.Name == "__length") &&
+			get.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldfld && i.Operand is FieldReference f && f.Name == "__tracks"),
+			"AnimationClip.length is the port's cached curve-length getter");
+		Require(get.DeclaringType.Fields.Any(f => f.Name == "__events"), "AnimationClip keeps its events in __events");
+		var body = get.Body;
+		body.SimplifyMacros();
+		var il = body.GetILProcessor();
+		var rets = body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList();
+		Require(rets.Count >= 1, "AnimationClip.length returns");
+		foreach (var ret in rets)
+		{
+			// keep `ret` as the branch target: it becomes ldarg.0, followed by call + a new ret
+			ret.OpCode = OpCodes.Ldarg_0; ret.Operand = null;
+			var call = il.Create(OpCodes.Call, hook);
+			il.InsertAfter(ret, call);
+			il.InsertAfter(call, il.Create(OpCodes.Ret));
+		}
+		body.OptimizeMacros();
+		Require(ClipLengthPatched(module), "clip length fix not installed");
+	}
+
+	private static bool ClipLengthPatched(ModuleDefinition module)
+	{
+		var ins = Method(module, "UnityEngine.AnimationClip", "get_length", 0).Body.Instructions;
+		var rets = ins.Where(i => i.OpCode == OpCodes.Ret).ToList();
+		return rets.Count > 0 && rets.All(r => r.Previous is { OpCode: var op, Operand: MethodReference m } && op == OpCodes.Call &&
+			m.Name == "ClipLength" && m.DeclaringType.FullName == "Svz.AnimationFixes" && m.DeclaringType.Scope.Name == Enh);
+	}
+
+
 	private static bool SameSignatureType(TypeReference a, TypeReference b)
 	{
 		// Mono.Cecil uses source generic parameter names for definitions and
@@ -482,6 +538,7 @@ internal static class Program
 			("dying enemy cleanup has safe timeout", StuckCorpsesPatched(m)),
 			("font selector uses optional HD atlas policy", FontSelectionPatched(m)),
 			("animation and particles use reusable snapshots", SnapshotsPatched(m)),
+			("event-only animation clips last until their last event", ClipLengthPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

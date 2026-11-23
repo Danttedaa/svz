@@ -9,6 +9,7 @@
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
+    <DefineConstants>$(DefineConstants);SVZ_GODOT</DefineConstants>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>

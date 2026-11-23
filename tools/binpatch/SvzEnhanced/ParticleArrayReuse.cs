@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Svz
 {
@@ -13,6 +14,18 @@ namespace Svz
         {
             if (length < 0) throw new ArgumentOutOfRangeException(nameof(length));
             return previous != null && previous.Length == length ? previous : new T[length];
+        }
+
+        /// <summary>
+        /// Reuse only the single index buffer belonging to this mesh's previous
+        /// submesh. No global pooling, no cross-emitter aliases, no stale lengths.
+        /// </summary>
+        public static int[] ReuseIndices(int length, List<int[]> priorSubmeshes)
+        {
+            if (length < 0) throw new ArgumentOutOfRangeException(nameof(length));
+            int[] previous = priorSubmeshes != null && priorSubmeshes.Count == 1
+                ? priorSubmeshes[0] : null;
+            return previous != null && previous.Length == length ? previous : new int[length];
         }
     }
 }

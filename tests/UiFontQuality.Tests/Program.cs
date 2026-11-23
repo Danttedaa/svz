@@ -110,10 +110,28 @@ internal static class Test
 			"transparent text remains invisible");
 		Ok(UiInkPolicy.InkKind(float.NaN, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 0,
 			"invalid dimensions always preserve original");
-		Ok(UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Original &&
+		Ok(UiInkPolicy.NextMode(UiInkPolicy.Native) == UiInkPolicy.Solid &&
+			UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Original &&
 			UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.Outlined &&
-			UiInkPolicy.NextMode(UiInkPolicy.Outlined) == UiInkPolicy.Solid,
-			"gesture cycles solid, original and outline without losing modes");
+			UiInkPolicy.NextMode(UiInkPolicy.Outlined) == UiInkPolicy.Native,
+			"gesture cycles readable, solid, original, outlined without losing modes");
+
+		Ok(UiReadablePolicy.Eligible("LEVEL UP HERO", 30, 709, 1, 1, 1, 1),
+			"small monochrome labels are eligible for readable font");
+		Ok(UiReadablePolicy.Eligible("WAVE 16 DESCRIPTION", 35, 709, 1, 1, 1, 1),
+			"small wave description eligible");
+		Ok(!UiReadablePolicy.Eligible("SHOP", 80, 709, 1, 1, 1, 1),
+			"large decorative headings stay original");
+		Ok(!UiReadablePolicy.Eligible("DAY 1", 24, 709, 1, 0.2f, 0.2f, 1),
+			"colored reward labels remain in original font");
+		Ok(!UiReadablePolicy.Eligible(" ", 24, 709, 1, 1, 1, 1),
+			"blank labels do not create native draw calls");
+		Ok(!UiReadablePolicy.Eligible("HI", 24, 709, 1, 1, 1, 0),
+			"transparent labels remain hidden");
+		Ok(!UiReadablePolicy.Eligible("HI", float.NaN, 709, 1, 1, 1, 1),
+			"invalid metrics fall back to original rendering");
+		Ok(UiReadablePolicy.FontSize(32) == 27,
+			"native font sized to match measured legacy line height");
 		Console.WriteLine($"[test] {passed} HD font selection and small-text clarity assertions passed");
 	}
 }

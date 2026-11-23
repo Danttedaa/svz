@@ -87,6 +87,11 @@ internal static class Program
 			x.GenericParameters.Count == 1 && x.Parameters.Count == 2 &&
 			x.Parameters[0].ParameterType.FullName == "System.Int32"),
 			"ParticleArrayReuse.Reuse<T>(int,T[]) missing");
+		Require(particleReuse.Methods.Any(x => x.Name == "ReuseIndices" && x.IsStatic && x.IsPublic &&
+			x.Parameters.Count == 2 && x.ReturnType.FullName == "System.Int32[]" &&
+			x.Parameters[0].ParameterType.FullName == "System.Int32" &&
+			x.Parameters[1].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32[]>"),
+			"ParticleArrayReuse.ReuseIndices(int,List<int[]>) missing");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -768,8 +773,28 @@ internal static class Program
 			allocation.OpCode = OpCodes.Call;
 			allocation.Operand = instantiated;
 		}
+		// Triangle indices are the fourth large allocation per emitter. A mesh
+		// has exactly one submesh in the original particle path, so use only
+		// that mesh's previous index array when its size still matches.
+		var indices = instructions.Where(i => i.OpCode == OpCodes.Newarr &&
+			i.Operand is TypeReference t && t.FullName == "System.Int32").ToList();
+		Require(indices.Count == 1 && instructions.IndexOf(indices[0]) > previousIndex,
+			"BuildMesh allocates exactly one triangle-index array after colors");
+		var submeshes = meshType.Fields.SingleOrDefault(f => f.Name == "__subs" &&
+			f.FieldType.FullName == "System.Collections.Generic.List`1<System.Int32[]>");
+		Require(submeshes != null, "Mesh.__subs is List<int[]>");
+		var reuseIndices = new MethodReference("ReuseIndices", new ArrayType(module.TypeSystem.Int32), helper)
+		{
+			HasThis = false
+		};
+		reuseIndices.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		reuseIndices.Parameters.Add(new ParameterDefinition(submeshes.FieldType));
+		il.InsertBefore(indices[0], il.Create(OpCodes.Ldloc, meshLocal));
+		il.InsertBefore(indices[0], il.Create(OpCodes.Ldfld, submeshes));
+		indices[0].OpCode = OpCodes.Call;
+		indices[0].Operand = reuseIndices;
 		m.Body.OptimizeMacros();
-		Require(ParticleArrayReusePatched(module), "particle buffer reuse hooks not installed");
+		Require(ParticleArrayReusePatched(module), "particle vertex/index reuse hooks not installed");
 	}
 
 	private static bool ParticleArrayReusePatched(ModuleDefinition module)
@@ -778,7 +803,11 @@ internal static class Program
 		return m.Body.Instructions.Count(i => i.OpCode == OpCodes.Call &&
 			i.Operand is GenericInstanceMethod call && call.Name == "Reuse" &&
 			call.DeclaringType.FullName == "Svz.ParticleArrayReuse" &&
-			call.DeclaringType.Scope.Name == Enh) == 3;
+			call.DeclaringType.Scope.Name == Enh) == 3 &&
+			m.Body.Instructions.Count(i => Calls(i, "Svz.ParticleArrayReuse", "ReuseIndices") &&
+				i.Operand is MethodReference r && r.DeclaringType.Scope.Name == Enh) == 1 &&
+			!m.Body.Instructions.Any(i => i.OpCode == OpCodes.Newarr &&
+				i.Operand is TypeReference t && t.FullName == "System.Int32");
 	}
 
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;

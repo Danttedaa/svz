@@ -26,6 +26,9 @@ dotnet run --project "$here/UiFontQuality.Tests"
 echo "== reusable frame snapshots"
 dotnet run --project "$here/ArraySnapshots.Tests"
 
+echo "== reusable particle mesh buffers"
+dotnet run --project "$here/ParticleBuffers.Tests"
+
 godot_dir="${1:-}"
 [ -n "$godot_dir" ] || { echo "(skipping Godot runtime test: pass the Godot 4.7.2 .NET directory)"; exit 0; }
 godot_bin="$(ls "$godot_dir"/Godot_v4.7.2-stable_mono_linux*.x86_64 2>/dev/null | head -1)"

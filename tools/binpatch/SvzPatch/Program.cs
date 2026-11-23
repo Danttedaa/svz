@@ -425,6 +425,22 @@ internal static class Program
 			return instructions.Count(IsSnapshotHook) == 1 && !instructions.Any(IsListToArray);
 		});
 
+
+	private static bool SameSignatureType(TypeReference a, TypeReference b)
+	{
+		// Mono.Cecil uses source generic parameter names for definitions and
+		// positional !!0 references for imported call sites. Names need not match.
+		if (a is GenericParameter ap && b is GenericParameter bp)
+			return ap.Position == bp.Position && ap.Type == bp.Type;
+		if (a is ArrayType aa && b is ArrayType ba)
+			return aa.Rank == ba.Rank && SameSignatureType(aa.ElementType, ba.ElementType);
+		if (a is GenericInstanceType ai && b is GenericInstanceType bi)
+			return ai.ElementType.FullName == bi.ElementType.FullName &&
+				ai.GenericArguments.Count == bi.GenericArguments.Count &&
+				ai.GenericArguments.Zip(bi.GenericArguments, SameSignatureType).All(v => v);
+		return a.FullName == b.FullName;
+	}
+
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
 	private static bool Resolves(string patched, string enhancedPath)
 	{
@@ -435,8 +451,10 @@ internal static class Program
 		{
 			var t = enh.GetType(r.DeclaringType.FullName);
 			var match = t?.Methods.FirstOrDefault(d => d.Name == r.Name && d.IsPublic && d.IsStatic &&
-				d.ReturnType.FullName == r.ReturnType.FullName &&
-				d.Parameters.Select(x => x.ParameterType.FullName).SequenceEqual(r.Parameters.Select(x => x.ParameterType.FullName)));
+				SameSignatureType(d.ReturnType, r.ReturnType) &&
+				d.Parameters.Count == r.Parameters.Count &&
+				d.Parameters.Zip(r.Parameters, (left, right) =>
+					SameSignatureType(left.ParameterType, right.ParameterType)).All(v => v));
 			Console.WriteLine($"  [{(match != null ? "OK" : "--")}] resolves {r.FullName}");
 			all &= match != null;
 		}

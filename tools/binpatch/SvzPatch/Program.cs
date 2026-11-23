@@ -78,8 +78,9 @@ internal static class Program
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
 		var perf = enhanced.GetType("Svz.PerfTrace") ?? throw new PatchException("Svz.PerfTrace missing");
-		foreach (var name in new[] { "BeginRender", "EndRender", "BeginGui", "EndGui" })
+		foreach (var name in new[] { "BeginRender", "EndRender", "BeginGui", "EndGui", "EndRenderer" })
 			Expect(perf, name, $"::{name}()");
+		Expect(perf, "BeginRenderer", "::BeginRenderer(System.Object)");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -245,6 +246,7 @@ internal static class Program
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 		PatchRenderTiming(module, perfRef);
+		PatchRendererTiming(module, perfRef);
 		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
@@ -660,6 +662,29 @@ internal static class Program
 		body.OptimizeMacros();
 	}
 
+
+	// The Render.Sync loop already has a Renderer on the evaluation stack.
+	// Duplicate it for the profiler, then invoke the original call unchanged.
+	private static void PatchRendererTiming(ModuleDefinition module, TypeReference perf)
+	{
+		var body = Method(module, "Svz.Render", "Sync", 0).Body;
+		body.SimplifyMacros();
+		var hits = body.Instructions.Where(i => Calls(i, "Svz.Render", "SyncRenderer")).ToList();
+		Require(hits.Count == 1, "Render.Sync calls SyncRenderer exactly once");
+		var call = hits[0];
+		Require(call.OpCode == OpCodes.Call && call.Operand is MethodReference m &&
+			!m.HasThis && m.Parameters.Count == 1 && m.ReturnType.FullName == "System.Void",
+			"Render.SyncRenderer call must be static void(Renderer)");
+		var begin = new MethodReference("BeginRenderer", module.TypeSystem.Void, perf) { HasThis = false };
+		begin.Parameters.Add(new ParameterDefinition(module.TypeSystem.Object));
+		var end = new MethodReference("EndRenderer", module.TypeSystem.Void, perf) { HasThis = false };
+		var il = body.GetILProcessor();
+		il.InsertBefore(call, il.Create(OpCodes.Dup));
+		il.InsertBefore(call, il.Create(OpCodes.Call, begin));
+		il.InsertAfter(call, il.Create(OpCodes.Call, end));
+		body.OptimizeMacros();
+	}
+
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
 	private static void PatchPerFrameLookups(ModuleDefinition module, TypeReference reuse)
@@ -791,6 +816,8 @@ internal static class Program
 				CallsEnh("Svz.Main", "_Process", 1, "EndRender") &&
 				CallsEnh("Svz.Main", "_Process", 1, "BeginGui") &&
 				CallsEnh("Svz.Main", "_Process", 1, "EndGui")),
+			("each renderer is profiled without changing its call", CallsEnh("Svz.Render", "Sync", 0, "BeginRenderer") &&
+				CallsEnh("Svz.Render", "Sync", 0, "EndRenderer")),
 			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");

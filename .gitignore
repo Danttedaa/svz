@@ -30,3 +30,8 @@ tests/**/obj/
 tests/godot-runtime/.godot/
 tests/godot-runtime/.nuget/
 tests/godot-runtime/nuget.config
+# probe app build outputs
+tools/probe/.godot/
+tools/probe/bin/
+tools/probe/obj/
+tools/probe/nuget.config

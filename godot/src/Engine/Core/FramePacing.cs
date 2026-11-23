@@ -27,6 +27,11 @@ namespace Svz
 		public static int EffectiveFps => sFallenBack ? Settings.FallbackFps : Settings.TargetFps;
 		public static double DisplayHz { get; private set; }
 		public static PacingDecision Decision { get; private set; }
+		/// Result of the last Android refresh-rate request ("" before the first one, or off Android).
+		public static string LastBridgeStatus { get; private set; } = "";
+		/// Last "stats ..." summary (5-second window), also written to the log.
+		public static string LastStats => sStats.Last;
+		public static bool FallenBack => sFallenBack;
 
 		private static Node sRoot;
 		private static Action<string> sNotify;
@@ -81,11 +86,7 @@ namespace Svz
 			}
 			if (sToggleFps.Update(touchCount, delta))
 			{
-				Settings.TargetFps = Settings.TargetFps >= 120 ? 60 : 120;
-				sFallenBack = false;
-				sMonitor.Retarget(Settings.TargetFps);
-				Save();
-				Apply("toggle");
+				SetTargetFps(Settings.TargetFps >= 120 ? 60 : 120, "toggle");
 				sNotify?.Invoke($"Frame rate: {Settings.TargetFps} FPS");
 			}
 			if (sToggleOverlay.Update(touchCount, delta))
@@ -98,6 +99,17 @@ namespace Svz
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
 			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
 			UpdateOverlay(delta);
+		}
+
+		/// Change the saved frame-rate target (for menus and tools); clears a session fallback.
+		public static void SetTargetFps(int fps, string why = "set")
+		{
+			if (sRoot == null) return;
+			Settings.TargetFps = FrameSettings.Sanitize(fps, Settings.TargetFps);
+			sFallenBack = false;
+			sMonitor.Retarget(Settings.TargetFps);
+			Save();
+			Apply(why);
 		}
 
 		/// After a level load: loading hitches must not count against the frame-rate target.
@@ -155,7 +167,11 @@ namespace Svz
 				var activity = rt.Call("getActivity").AsGodotObject();
 				if (activity == null) { Log("no activity; cannot request refresh rate"); return; }
 				int api = AndroidApiLevel();
-				var runnable = rt.Call("createRunnableFromGodotCallable", Callable.From(() => Log(SendFrameRate(activity, api, hz, allowNonSeamless))));
+				var runnable = rt.Call("createRunnableFromGodotCallable", Callable.From(() =>
+				{
+					LastBridgeStatus = SendFrameRate(activity, api, hz, allowNonSeamless);
+					Log(LastBridgeStatus);
+				}));
 				activity.Call("runOnUiThread", runnable);
 			}
 			catch (Exception e)

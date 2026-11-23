@@ -177,3 +177,17 @@ follow their original return-to-battle path. No general active enemies, damage,
 health, rewards, save or animation callbacks are changed. This must be tested
 in game before calling the frozen-zombie defect fixed. A log line beginning
 `[svz-death]` is emitted if the failsafe triggers.
+
+## Milestone 7 — HD bitmap-font selection (experimental, not visual QA)
+
+The legacy `FontSetFinder` originally selects the **nearest** font
+resolution, so a modern landscape display can select the lower-resolution
+768px bitmap-font atlas and stretch thin strokes. This experimental patch
+selects the game's existing **1536px** asset set when the Android viewport
+height is in [700,1536], if that atlas is listed by the game. It preserves
+the original nearest-resolution choice for small screens and missing atlases.
+
+The patch changes no font assets, colours, hitboxes or legacy GUI layout.
+**Visual verification is required** on Shop, Allies, tutorial and victory
+screens: sharper bitmap sources do not guarantee improved contrast or
+identical font size. If text clips or degrades, revert this experiment.

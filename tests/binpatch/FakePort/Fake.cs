@@ -4,7 +4,8 @@ using Godot;
 namespace UnityEngine
 {
 	public sealed class Time { internal static float __smoothDt = 1f / 30f, __dt; }
-	public struct Mathf { public static float Lerp(float a, float b, float t) => a + (b - a) * t; }
+	public struct Mathf { public static float Lerp(float a, float b, float t) => a + (b - a) * t; public static int Abs(int x) => Math.Abs(x); }
+	public sealed class Screen { public static int height => 1080; }
 	public sealed class Input { public static int touchCount => 0; }
 	// Stand-in for the legacy coroutine yield instruction; no proprietary game code.
 	public sealed class WaitForSeconds { public float Seconds { get; } public WaitForSeconds(float seconds) { Seconds = seconds; } }
@@ -102,5 +103,23 @@ public class CharactersManager
 				mDyingCharacters.RemoveAt(i);
 			}
 		}
+	}
+}
+
+
+// Stand-in for the original legacy font-asset resolution policy.
+// The hook changes only the chosen resolution folder name.
+internal sealed class FontSetFinder
+{
+	private string AutoFindClosestResolutionFolderPath(System.Collections.Generic.List<int> allRez)
+	{
+		int best = allRez[0];
+		int diff = UnityEngine.Mathf.Abs(UnityEngine.Screen.height - best);
+		foreach (int rez in allRez)
+		{
+			int n = UnityEngine.Mathf.Abs(UnityEngine.Screen.height - rez);
+			if (n < diff) { diff = n; best = rez; }
+		}
+		return best.ToString();
 	}
 }

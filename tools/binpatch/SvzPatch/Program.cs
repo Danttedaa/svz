@@ -89,6 +89,13 @@ internal static class Program
 			x.Parameters[2].ParameterType.FullName == "System.Single" &&
 			x.ReturnType.FullName == "System.Boolean");
 		Require(deathMethod != null, "DeathCleanup.ShouldRemove(object,bool,float) required");
+		var fonts = enhanced.GetType("Svz.UiFontQuality") ?? throw new PatchException("Svz.UiFontQuality missing");
+		Require(fonts.Methods.Any(x => x.Name == "SelectResolution" && x.IsStatic && x.IsPublic &&
+			x.Parameters.Count == 2 && x.ReturnType.FullName == "System.String" &&
+			x.Parameters[0].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32>" &&
+			x.Parameters[1].ParameterType.FullName == "System.Int32"),
+			"UiFontQuality.SelectResolution(List<int>,int) required");
+
 
 
 
@@ -99,6 +106,7 @@ internal static class Program
 		var polRef = new TypeReference("Svz", "FramePacingPolicy", module, asmRef);
 		var victoryRef = new TypeReference("Svz", "VictoryTiming", module, asmRef);
 		var deathRef = new TypeReference("Svz", "DeathCleanup", module, asmRef);
+		var fontRef = new TypeReference("Svz", "UiFontQuality", module, asmRef);
 		var ts = module.TypeSystem;
 		var nodeRef = ExistingTypeRef(module, "Godot.Node");
 		var actionOpen = module.GetTypeReferences().FirstOrDefault(t => t.FullName == "System.Action`1");
@@ -125,6 +133,12 @@ internal static class Program
 		var smooth = M(polRef, "SmoothDeltaTime", ts.Single, ts.Single, ts.Single);
 		var realtimeWait = M(victoryRef, "WaitRealSeconds", ExistingTypeRef(module, "System.Collections.IEnumerator"), ts.Single);
 		var shouldRemove = M(deathRef, "ShouldRemove", ts.Boolean, ts.Object, ts.Boolean, ts.Single);
+		var fontChoose = Method(module, "FontSetFinder", "AutoFindClosestResolutionFolderPath", 1);
+		Require(fontChoose.Parameters[0].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32>",
+			"FontSetFinder list parameter");
+		var fontSelect = M(fontRef, "SelectResolution", ts.String, fontChoose.Parameters[0].ParameterType, ts.Int32);
+		var screenHeight = module.ImportReference(Method(module, "UnityEngine.Screen", "get_height", 0));
+
 		var actionCtor = new MethodReference(".ctor", ts.Void, actionString) { HasThis = true };
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.Object));
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.IntPtr));
@@ -205,6 +219,7 @@ internal static class Program
 		// handler are left in their original order; abort if the compiled game's shape changed.
 		PatchWinDelay(module, realtimeWait);
 		PatchStuckCorpses(module, shouldRemove);
+		PatchFontSelection(module, fontSelect, screenHeight);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -314,6 +329,35 @@ internal static class Program
 			target.Body.Instructions.Any(i => Calls(i, "Character", "get_health"));
 	}
 
+
+	// Preserve the existing asset database and font renderer; only change the
+	// closest-resolution policy so medium landscape devices load sharper atlases.
+	private static void PatchFontSelection(ModuleDefinition module, MethodReference selector, MethodReference height)
+	{
+		var m = Method(module, "FontSetFinder", "AutoFindClosestResolutionFolderPath", 1);
+		Require(m.ReturnType.FullName == "System.String", "font selector return type");
+		Require(m.HasBody && m.Body.Instructions.Any(i => Calls(i, "UnityEngine.Mathf", "Abs")) &&
+			m.Body.Instructions.Any(i => Calls(i, "UnityEngine.Screen", "get_height")),
+			"font selector still uses original nearest-resolution algorithm");
+		m.Body.Instructions.Clear();
+		m.Body.Variables.Clear();
+		m.Body.ExceptionHandlers.Clear();
+		var il = m.Body.GetILProcessor();
+		il.Append(il.Create(OpCodes.Ldarg_1));
+		il.Append(il.Create(OpCodes.Call, height));
+		il.Append(il.Create(OpCodes.Call, selector));
+		il.Append(il.Create(OpCodes.Ret));
+		Require(FontSelectionPatched(module), "high-resolution font selector not installed");
+	}
+
+	private static bool FontSelectionPatched(ModuleDefinition module)
+	{
+		var m = Method(module, "FontSetFinder", "AutoFindClosestResolutionFolderPath", 1);
+		return m.Body.Instructions.Count(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.UiFontQuality" &&
+			r.DeclaringType.Scope.Name == Enh && r.Name == "SelectResolution") == 1;
+	}
+
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
 	private static bool Resolves(string patched, string enhancedPath)
 	{
@@ -351,6 +395,7 @@ internal static class Program
 			("assembly reference SvzEnhanced", m.AssemblyReferences.Any(a => a.Name == Enh)),
 			("PostWinDelay uses unscaled real-time wait", WinDelayPatched(m)),
 			("dying enemy cleanup has safe timeout", StuckCorpsesPatched(m)),
+			("font selector uses optional HD atlas policy", FontSelectionPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

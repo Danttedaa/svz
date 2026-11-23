@@ -9,11 +9,12 @@
 # Stages:
 #   1. normal start (intro): app runs, SvzEnhanced.dll loaded, game data loaded
 #   2. Store opened directly (--level=3): the text patches run (fonts, contrast halo)
-#   3. battle opened directly (--level=2 --killall=25): skinning, animation blending, death and corpse code
+#   3. battle opened directly (--level=2 --killall=30): verify combat loads; report whether enemies die
 # Stages 2-3 need the game's debug command line (--level=N). Godot ignores command-line extras sent to its
 # exported launcher activity, so these stages install emulator-only VARIANTS of the APK whose packaged
 # command line (assets/_cl_) has the arguments appended, signed with a throwaway key (smoke_variant.py).
 # The published APK is not changed. If a variant cannot be built, the stage is WARN (not exercised).
+# PASS means startup passed; WARN lines identify paths that were not exercised.
 set -uo pipefail
 apk="$1"; pkg="$2"; out="$3"; wait_s="${4:-60}"
 mkdir -p "$out"
@@ -102,7 +103,22 @@ else
     fi
     # stage 3: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then
-      grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"
+      # A launch alone does not exercise corpse cleanup. v1010 logged
+      # "[svz] killed 0 enemies", which previously looked like a successful kill test.
+      # Keep startup smoke compatible; report the untested combat path explicitly.
+      kill_line=$(grep -m1 -oE '\[svz\] killed [0-9]+ enemies' "$out/logcat-battle.txt" || true)
+      if [ -z "$kill_line" ]; then
+        warn+=("battle: no kill count; enemy death path not exercised")
+      else
+        note "battle: $kill_line"
+        kill_count=${kill_line#* killed }
+        kill_count=${kill_count%% *}
+        if [ "$kill_count" -eq 0 ]; then
+          warn+=("battle: zero enemies killed; death/corpse cleanup not exercised")
+        else
+          note "battle: positive enemy kills observed ($kill_count); cleanup still needs explicit validation"
+        fi
+      fi
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"
       grep -o "\[svz-death\].*" "$out/logcat-battle.txt" | head -3 | sed 's/^/battle: /' >> "$out/details.txt"
     fi

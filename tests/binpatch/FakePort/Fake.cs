@@ -63,6 +63,10 @@ namespace Svz
 			float dt = Math.Min((float)delta, 1f / 3f);
 			Time.__dt = dt;
 			Time.__smoothDt = Mathf.Lerp(Time.__smoothDt, dt, 0.1f);
+			AnimationSystem.Update(dt);
+			Particles.Update(dt);
+			Render.Sync();
+			GuiSystem.Frame();
 		}
 	}
 }
@@ -160,6 +164,7 @@ namespace Svz
 	}
 	public static class AnimationSystem
 	{
+		public static void Update(float dt) { }
 		private static void Step(FakeAnimation a, float dt)
 		{
 			foreach (var s in a.__states.ToArray()) { if (s != null) { } }
@@ -194,6 +199,7 @@ namespace Svz
 	public static class Render
 	{
 		public static int Hidden;
+		public static void Sync() { SyncRenderer(new object()); }
 		private static void SyncRenderer(object r)
 		{
 			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;
@@ -229,6 +235,7 @@ namespace Svz
 {
 	public static partial class GuiSystem
 	{
+		public static void Frame() { }
 		public static readonly System.Collections.Generic.List<UnityEngine.GUIElement> Elements = new();
 		private partial class GuiCanvas : Godot.Node2D
 		{

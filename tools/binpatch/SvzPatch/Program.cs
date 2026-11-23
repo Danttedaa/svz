@@ -235,6 +235,9 @@ internal static class Program
 		PatchFontSelection(module, fontSelect, screenHeight);
 		PatchSnapshots(module, asmRef);
 		PatchClipLength(module, clipLength);
+		var uiTextRef = new TypeReference("Svz", "UiText", module, asmRef);
+		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
+		PatchTextHalo(module, uiTextRef);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -482,6 +485,105 @@ internal static class Program
 	}
 
 
+	// SUILabel.initSprite: `font = (Font)Resources.Load(basePath + fontFile, typeof(Font))` (first of its two
+	// loads; the second is the Fonts/default fallback). Keep the loaded object on the stack and also pass it
+	// to UiText.PrepareFont, which scales the 1536 set's glyph metrics once per Font.
+	private static void PatchFontLoad(ModuleDefinition module, MethodReference hook)
+	{
+		var body = Method(module, "SUILabel", "initSprite", 1).Body;
+		body.SimplifyMacros();
+		var loads = body.Instructions.Where(i => Calls(i, "UnityEngine.Resources", "Load") &&
+			((MethodReference)i.Operand).Parameters.Count == 2).ToList();
+		Require(loads.Count == 2, "SUILabel.initSprite loads its font twice (selected set, then default)");
+		Require(body.Instructions.Any(i => Calls(i, "FontSetFinder", "get_basePath")), "SUILabel.initSprite uses FontSetFinder.basePath");
+		var il = body.GetILProcessor();
+		var dup = il.Create(OpCodes.Dup);
+		il.InsertAfter(loads[0], dup);
+		il.InsertAfter(dup, il.Create(OpCodes.Call, hook));
+		body.OptimizeMacros();
+		Require(FontLoadPatched(module), "font load hook not installed");
+	}
+
+	private static bool FontLoadPatched(ModuleDefinition module) =>
+		Method(module, "SUILabel", "initSprite", 1).Body.Instructions.Count(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference r && r.Name == "PrepareFont" && r.DeclaringType.FullName == "Svz.UiText" &&
+			r.DeclaringType.Scope.Name == Enh) == 1;
+
+	private static TypeDefinition GuiCanvas(ModuleDefinition module) =>
+		(module.GetType("Svz.GuiSystem") ?? throw new PatchException("type Svz.GuiSystem not found"))
+			.NestedTypes.SingleOrDefault(t => t.Name == "GuiCanvas") ?? throw new PatchException("Svz.GuiSystem/GuiCanvas not found");
+
+	// GuiCanvas.DrawText draws each glyph with CanvasItem.DrawTextureRectRegion: route it through
+	// UiText.DrawGlyph (same arguments, `this` first). GuiCanvas._Draw calls DrawText(t, sh) once per text:
+	// call it once more before, between UiText.BeginHaloPass() and EndHaloPass(), so the halo is under all
+	// glyphs of the label.
+	private static void PatchTextHalo(ModuleDefinition module, TypeReference uiText)
+	{
+		var canvas = GuiCanvas(module);
+		var drawText = canvas.Methods.SingleOrDefault(m => m.Name == "DrawText" && m.Parameters.Count == 2 &&
+			m.Parameters[0].ParameterType.FullName == "UnityEngine.GUIText" && m.Parameters[1].ParameterType.FullName == "System.Single")
+			?? throw new PatchException("GuiCanvas.DrawText(GUIText, float) not found");
+		var body = drawText.Body;
+		body.SimplifyMacros();
+		var draws = body.Instructions.Where(i => Calls(i, "Godot.CanvasItem", "DrawTextureRectRegion")).ToList();
+		Require(draws.Count == 1, "GuiCanvas.DrawText draws glyphs with one DrawTextureRectRegion call");
+		var old = (MethodReference)draws[0].Operand;
+		Require(old.HasThis && old.Parameters.Count == 6, "DrawTextureRectRegion(texture, rect, src, modulate, transpose, clipUv)");
+		var glyph = new MethodReference("DrawGlyph", module.TypeSystem.Void, uiText) { HasThis = false };
+		glyph.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+		foreach (var p in old.Parameters) glyph.Parameters.Add(new ParameterDefinition(p.ParameterType));
+		draws[0].OpCode = OpCodes.Call;
+		draws[0].Operand = glyph;
+		body.OptimizeMacros();
+
+		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0).Body;
+		draw.SimplifyMacros();
+		var calls = draw.Instructions.Where(i => i.OpCode == OpCodes.Call && i.Operand is MethodReference r && r.Name == "DrawText" &&
+			r.DeclaringType.FullName == canvas.FullName && r.Parameters.Count == 2).ToList();
+		Require(calls.Count == 1, "GuiCanvas._Draw calls DrawText once");
+		var call = calls[0];
+		var a2 = call.Previous; var a1 = a2?.Previous; var a0 = a1?.Previous;
+		bool IsLoad(Instruction i) => i != null && (i.OpCode == OpCodes.Ldloc || i.OpCode == OpCodes.Ldarg);
+		Require(a0 != null && a0.OpCode == OpCodes.Ldarg && a0.Operand == draw.ThisParameter && IsLoad(a1) && IsLoad(a2),
+			"GuiCanvas._Draw: DrawText(this, local text, sh)");
+		var il = draw.GetILProcessor();
+		// keep a0 as the branch target: it becomes BeginHaloPass, then a duplicate call, EndHaloPass, the original call
+		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
+		var end = new MethodReference("EndHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
+		var origThis = il.Create(OpCodes.Ldarg, draw.ThisParameter);
+		var a1Op = a1.OpCode; var a1Arg = a1.Operand; var a2Op = a2.OpCode; var a2Arg = a2.Operand;
+		a0.OpCode = OpCodes.Call; a0.Operand = begin;
+		var seq = new[]
+		{
+			il.Create(OpCodes.Ldarg, draw.ThisParameter), Clone(il, a1Op, a1Arg), Clone(il, a2Op, a2Arg),
+			il.Create(OpCodes.Call, drawText), il.Create(OpCodes.Call, end), origThis,
+		};
+		var at = a0;
+		foreach (var ins in seq) { il.InsertAfter(at, ins); at = ins; }
+		draw.OptimizeMacros();
+		Require(TextHaloPatched(module), "text halo pass not installed");
+	}
+
+	private static Instruction Clone(ILProcessor il, OpCode op, object operand) => operand switch
+	{
+		VariableDefinition v => il.Create(op, v),
+		ParameterDefinition p => il.Create(op, p),
+		_ => throw new PatchException("unexpected load operand in GuiCanvas._Draw"),
+	};
+
+	private static bool TextHaloPatched(ModuleDefinition module)
+	{
+		var canvas = GuiCanvas(module);
+		bool Calls(MethodDefinition m, string name) => m.Body.Instructions.Any(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference r && r.Name == name && r.DeclaringType.FullName == "Svz.UiText" && r.DeclaringType.Scope.Name == Enh);
+		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
+		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
+		return Calls(drawText, "DrawGlyph") && Calls(draw, "BeginHaloPass") && Calls(draw, "EndHaloPass") &&
+			!drawText.Body.Instructions.Any(i => (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
+				i.Operand is MethodReference r && r.Name == "DrawTextureRectRegion");
+	}
+
+
 	private static bool SameSignatureType(TypeReference a, TypeReference b)
 	{
 		// Mono.Cecil uses source generic parameter names for definitions and
@@ -539,6 +641,8 @@ internal static class Program
 			("font selector uses optional HD atlas policy", FontSelectionPatched(m)),
 			("animation and particles use reusable snapshots", SnapshotsPatched(m)),
 			("event-only animation clips last until their last event", ClipLengthPatched(m)),
+			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
+			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

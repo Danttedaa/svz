@@ -32,6 +32,11 @@ namespace Svz
 		/// Last "stats ..." summary (5-second window), also written to the log.
 		public static string LastStats => sStats.Last;
 		public static bool FallenBack => sFallenBack;
+		/// Called at the end of every Frame(delta, touchCount): lets other enhancements (binary-patch route)
+		/// add gestures without their own call site in the game.
+		public static event Action<double, int> AfterFrame;
+		/// Show a short message with the game's toast (no-op before Init).
+		public static void Notify(string text) => sNotify?.Invoke(text);
 
 		private static Node sRoot;
 		private static Action<string> sNotify;
@@ -105,6 +110,7 @@ namespace Svz
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
 			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
 			UpdateOverlay(delta);
+			AfterFrame?.Invoke(delta, touchCount);
 		}
 
 		/// Change the saved frame-rate target (for menus and tools); clears a session fallback.

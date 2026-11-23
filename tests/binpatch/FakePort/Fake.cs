@@ -120,6 +120,7 @@ public class CharactersManager
 // The hook changes only the chosen resolution folder name.
 internal sealed class FontSetFinder
 {
+	public string basePath => "Fonts/1536/";
 	private string AutoFindClosestResolutionFolderPath(System.Collections.Generic.List<int> allRez)
 	{
 		int best = allRez[0];
@@ -160,6 +161,59 @@ namespace Svz
 		private static void FinishStates(FakeAnimation a)
 		{
 			foreach (var s in a.__states.ToArray()) { if (s != null) { } }
+		}
+	}
+}
+
+
+// Stand-in shapes for the text patches (M10): SUILabel's two font loads, and GuiCanvas drawing each
+// GUIText's glyphs with one DrawTextureRectRegion call. No game code, fonts or layouts.
+namespace UnityEngine
+{
+	public class Object { }
+	public class Font : Object { }
+	public static class Resources { public static Object Load(string path, System.Type type) => path.Contains("default") ? new Font() : null; }
+	public class GUIElement { }
+	public class GUIText : GUIElement { public Font font { get; set; } }
+}
+
+public class SUILabel
+{
+	private readonly UnityEngine.GUIText mTextSprite = new UnityEngine.GUIText();
+	private void initSprite(string fontFile)
+	{
+		string path = new FontSetFinder().basePath + fontFile;
+		var font = (UnityEngine.Font)UnityEngine.Resources.Load(path, typeof(UnityEngine.Font));
+		if (font == null) font = (UnityEngine.Font)UnityEngine.Resources.Load("Fonts/default/" + fontFile, typeof(UnityEngine.Font));
+		mTextSprite.font = font;
+	}
+}
+
+namespace Svz
+{
+	public static partial class GuiSystem
+	{
+		public static readonly System.Collections.Generic.List<UnityEngine.GUIElement> Elements = new();
+		private partial class GuiCanvas : Godot.Node2D
+		{
+			public override void _Draw()
+			{
+				float sh = 1080f;
+				foreach (var item in System.Linq.Enumerable.ToList(Elements))
+				{
+					try
+					{
+						if (item is UnityEngine.GUIText t) DrawText(t, sh);
+					}
+					catch (Exception e) { GD.Print(e.Message); }
+				}
+			}
+			private void DrawText(UnityEngine.GUIText t, float sh)
+			{
+				Texture2D tex = null;
+				if (t.font == null) return;
+				DrawTextureRectRegion(tex, new Rect2(0, sh, 10, -10), new Rect2(0, 0, 10, 10), new Color(1, 1, 1, 1));
+			}
 		}
 	}
 }

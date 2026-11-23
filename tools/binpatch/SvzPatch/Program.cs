@@ -77,12 +77,19 @@ internal static class Program
 		Expect(fp, "GameRequested", "::GameRequested(System.Int32)");
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
+		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
+		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitRealSeconds" && x.IsPublic && x.IsStatic &&
+			x.Parameters.Count == 1 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
+			x.ReturnType.FullName == "System.Collections.IEnumerator");
+		Require(victoryMethod != null, "VictoryTiming.WaitRealSeconds(float) must return IEnumerator");
+
 
 		// references built from types SvZPort.dll already uses (no second System.Runtime reference)
 		var asmRef = new AssemblyNameReference(Enh, enhanced.Assembly.Name.Version);
 		module.AssemblyReferences.Add(asmRef);
 		var fpRef = new TypeReference("Svz", "FramePacing", module, asmRef);
 		var polRef = new TypeReference("Svz", "FramePacingPolicy", module, asmRef);
+		var victoryRef = new TypeReference("Svz", "VictoryTiming", module, asmRef);
 		var ts = module.TypeSystem;
 		var nodeRef = ExistingTypeRef(module, "Godot.Node");
 		var actionOpen = module.GetTypeReferences().FirstOrDefault(t => t.FullName == "System.Action`1");
@@ -107,6 +114,7 @@ internal static class Program
 		var gameRequested = M(fpRef, "GameRequested", ts.Void, ts.Int32);
 		var effectiveFps = M(fpRef, "get_EffectiveFps", ts.Int32);
 		var smooth = M(polRef, "SmoothDeltaTime", ts.Single, ts.Single, ts.Single);
+		var realtimeWait = M(victoryRef, "WaitRealSeconds", ExistingTypeRef(module, "System.Collections.IEnumerator"), ts.Single);
 		var actionCtor = new MethodReference(".ctor", ts.Void, actionString) { HasThis = true };
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.Object));
 		actionCtor.Parameters.Add(new ParameterDefinition(ts.IntPtr));
@@ -185,15 +193,13 @@ internal static class Program
 
 		// Shorten only the regular win coroutine's wait. Reward registration and the exit
 		// handler are left in their original order; abort if the compiled game's shape changed.
-		PatchWinDelay(module);
+		PatchWinDelay(module, realtimeWait);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
 		if (!Check(output)) throw new PatchException("patched file does not pass the check");
 	}
 
-
-	private const float FastWinDelaySeconds = 1.0f;
 
 	private static IEnumerable<TypeDefinition> Descendants(IEnumerable<TypeDefinition> types)
 	{
@@ -222,15 +228,15 @@ internal static class Program
 	{
 		var move = WinMoveNext(module);
 		if (move == null) return false;
-		var waits = move.Body.Instructions.Where(IsWinWait).ToArray();
-		if (waits.Length != 1) return false;
-		var before = waits[0].Previous;
-		return before != null && before.OpCode == OpCodes.Ldc_R4 &&
-			(float)before.Operand == FastWinDelaySeconds &&
-			before.Previous != null && before.Previous.OpCode == OpCodes.Pop;
+		var waits = move.Body.Instructions.Where(i =>
+			i.OpCode == OpCodes.Call && i.Operand is MethodReference m &&
+			m.DeclaringType.FullName == "Svz.VictoryTiming" &&
+			m.DeclaringType.Scope.Name == Enh &&
+			m.Name == "WaitRealSeconds").ToArray();
+		return waits.Length == 1 && !move.Body.Instructions.Any(IsWinWait);
 	}
 
-	private static void PatchWinDelay(ModuleDefinition module)
+	private static void PatchWinDelay(ModuleDefinition module, MethodReference realtimeWait)
 	{
 		var move = WinMoveNext(module);
 		Require(move != null, "exactly one PostWinDelay iterator state machine");
@@ -247,13 +253,15 @@ internal static class Program
 			"PostWinDelay does not retain RegisterWin + onFinishGameRequest");
 		var waits = body.Instructions.Where(IsWinWait).ToArray();
 		Require(waits.Length == 1, "PostWinDelay must construct exactly one WaitForSeconds");
-		// The original float.Parse(config[postWinTime]) still runs; replace only the
-		// duration left on the evaluation stack immediately before constructing the wait.
-		var il = body.GetILProcessor();
-		il.InsertBefore(waits[0], il.Create(OpCodes.Pop));
-		il.InsertBefore(waits[0], il.Create(OpCodes.Ldc_R4, FastWinDelaySeconds));
+		// A WaitForSeconds count is scaled by the game's slow-motion timeScale,
+		// so even 1 game-second may require many real seconds after a victory.
+		// Replace the yield expression with a nested IEnumerator that measures
+		// real elapsed time; CoroutineRunner.Step handles nested IEnumerators.
+		var call = waits[0];
+		call.OpCode = OpCodes.Call;
+		call.Operand = realtimeWait;
 		body.OptimizeMacros();
-		Require(WinDelayPatched(module), "PostWinDelay wait was not patched");
+		Require(WinDelayPatched(module), "PostWinDelay real-time wait not installed");
 	}
 
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
@@ -291,7 +299,7 @@ internal static class Program
 			("Application.targetFrameRate getter", CallsEnh("UnityEngine.Application", "get_targetFrameRate", 0, "get_EffectiveFps")),
 			("Application.targetFrameRate setter", CallsEnh("UnityEngine.Application", "set_targetFrameRate", 1, "GameRequested")),
 			("assembly reference SvzEnhanced", m.AssemblyReferences.Any(a => a.Name == Enh)),
-			("PostWinDelay wait -> 1.0 seconds", WinDelayPatched(m)),
+			("PostWinDelay uses unscaled real-time wait", WinDelayPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

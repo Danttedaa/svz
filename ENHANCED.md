@@ -131,3 +131,22 @@ repository; `tests/tools/test_workflows.py` keeps it that way.
 - The fake-port test includes a synthetic iterator to catch changes to the
   expected IL contract. The first private APK must verify the real iterator
   has the same pattern.
+
+## Milestone 4: real-time victory timing correction (draft, testing)
+
+Phone test of v1002 still reported approximately seven real seconds after the
+previous `WaitForSeconds(1.0f)` patch. This was a **scaled** Unity coroutine
+wait, while the win screen enables 0.1× timeScale and gradually restores it.
+The delay was not reliably one real second.
+
+The new patch changes **only** that coroutine's single yield expression to
+`Svz.VictoryTiming.WaitRealSeconds(originalGameSeconds)` returning a nested
+`IEnumerator` measured using monotonic real time. The existing `CoroutineRunner`
+executes nested iterators, so no engine or game-data rewrite is required.
+
+- Default 1.0 real second, independent of slow motion.
+- Reward registration and final scene transition remain in original order.
+- Verified by a pure .NET test that waits in real time for both 7s and 9s
+  legacy duration inputs, and by stand-in Cecil patch tests.
+- Still must test the **actual APK** on the S25 Ultra for normal wins,
+  rewards, save persistence and special ending behavior.

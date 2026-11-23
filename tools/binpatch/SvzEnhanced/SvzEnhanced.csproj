@@ -16,5 +16,6 @@
     <PackageReference Include="GodotSharp" Version="4.7.2" />
     <Compile Include="../../../godot/src/Engine/Core/FramePacing.cs" Link="FramePacing.cs" />
     <Compile Include="../../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
+    <Compile Include="VictoryTiming.cs" />
   </ItemGroup>
 </Project>

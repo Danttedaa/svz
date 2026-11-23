@@ -141,6 +141,26 @@ internal sealed class FontSetFinder
 }
 
 
+// Synthetic Unity structs/renderer used to validate retained mesh-array identity.
+namespace UnityEngine
+{
+	public struct Vector3 { public float x, y, z; }
+	public struct Vector2 { public float x, y; }
+	public struct Color { public float r, g, b, a; }
+	public sealed class Mesh
+	{
+		internal Vector3[] __v = Array.Empty<Vector3>();
+		internal Vector2[] __uv = Array.Empty<Vector2>();
+		internal Color[] __c = Array.Empty<Color>();
+		internal System.Collections.Generic.List<int[]> __subs = new() { Array.Empty<int>() };
+	}
+	public sealed class ParticleRenderer
+	{
+		internal readonly Mesh __pmesh = new Mesh();
+		public int ParticleCount { get; set; }
+	}
+}
+
 namespace Svz
 {
 	// Stand-in iteration shapes only; no proprietary particle/animation data.
@@ -153,6 +173,26 @@ namespace Svz
 	public static class Particles
 	{
 		public static readonly System.Collections.Generic.List<FakeParticleEmitter> Emitters = new();
+		// Mirrors the four allocations and the particle mesh field ownership in the port.
+		public static UnityEngine.Mesh BuildMesh(UnityEngine.ParticleRenderer renderer, object camera)
+		{
+			var mesh = renderer.__pmesh;
+			int n = renderer.ParticleCount;
+			var v = new UnityEngine.Vector3[n * 4];
+			var uv = new UnityEngine.Vector2[n * 4];
+			var col = new UnityEngine.Color[n * 4];
+			var tri = new int[n * 6];
+			for (int i = 0; i < n * 4; i++)
+			{
+				v[i] = new UnityEngine.Vector3 { x = i + n };
+				uv[i] = new UnityEngine.Vector2 { x = i };
+				col[i] = new UnityEngine.Color { a = n };
+			}
+			for (int i = 0; i < n * 6; i++) tri[i] = i;
+			mesh.__v = v; mesh.__uv = uv; mesh.__c = col;
+			mesh.__subs = new System.Collections.Generic.List<int[]> { tri };
+			return mesh;
+		}
 		public static void Update(float dt)
 		{
 			foreach (var e in Emitters.ToArray()) { if (e != null) { } }

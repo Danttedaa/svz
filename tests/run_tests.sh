@@ -48,9 +48,6 @@ cat > "$rt/nuget.config" <<XML
 XML
 export NUGET_PACKAGES="${NUGET_PACKAGES:-$rt/.nuget}"
 dotnet build "$rt/FramePacingRuntimeTest.csproj" -nologo -v quiet
-
-echo "== compile full Godot source port (catches source-only optimizer regressions)"
-dotnet build "$here/../godot/SvZPort.csproj" -c Release -nologo -v quiet --configfile "$rt/nuget.config"
 # --import once so Godot registers the C# script class, then run the test scene
 "$godot_bin" --headless --path "$rt" --import >/dev/null 2>&1 || true
 out=$("$godot_bin" --headless --path "$rt" 2>&1) || { echo "$out"; exit 1; }

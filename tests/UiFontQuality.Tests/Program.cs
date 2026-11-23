@@ -110,11 +110,11 @@ internal static class Test
 			"transparent text remains invisible");
 		Ok(UiInkPolicy.InkKind(float.NaN, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 0,
 			"invalid dimensions always preserve original");
-		Ok(UiInkPolicy.NextMode(UiInkPolicy.Native) == UiInkPolicy.Solid &&
-			UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Original &&
-			UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.Outlined &&
+		Ok(UiInkPolicy.NextMode(UiInkPolicy.Native) == UiInkPolicy.Original &&
+			UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.Native &&
+			UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Native &&
 			UiInkPolicy.NextMode(UiInkPolicy.Outlined) == UiInkPolicy.Native,
-			"gesture cycles readable, solid, original, outlined without losing modes");
+			"one hold toggles only readable and original font (legacy styles normalize)");
 
 		Ok(UiReadablePolicy.Eligible("LEVEL UP HERO", 30, 709, 1, 1, 1, 1),
 			"small monochrome labels are eligible for readable font");

@@ -63,6 +63,8 @@ namespace Svz
 			float dt = Math.Min((float)delta, 1f / 3f);
 			Time.__dt = dt;
 			Time.__smoothDt = Mathf.Lerp(Time.__smoothDt, dt, 0.1f);
+			Render.Sync();
+			GuiSystem.Frame();
 		}
 	}
 }
@@ -194,6 +196,7 @@ namespace Svz
 	public static class Render
 	{
 		public static int Hidden;
+		public static void Sync() { }
 		private static void SyncRenderer(object r)
 		{
 			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;
@@ -229,6 +232,7 @@ namespace Svz
 {
 	public static partial class GuiSystem
 	{
+		public static void Frame() { }
 		public static readonly System.Collections.Generic.List<UnityEngine.GUIElement> Elements = new();
 		private partial class GuiCanvas : Godot.Node2D
 		{

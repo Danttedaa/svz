@@ -63,6 +63,8 @@ namespace Svz
 			float dt = Math.Min((float)delta, 1f / 3f);
 			Time.__dt = dt;
 			Time.__smoothDt = Mathf.Lerp(Time.__smoothDt, dt, 0.1f);
+			AnimationSystem.Update(dt);
+			Particles.Update(dt);
 			Render.Sync();
 			GuiSystem.Frame();
 		}
@@ -162,6 +164,7 @@ namespace Svz
 	}
 	public static class AnimationSystem
 	{
+		public static void Update(float dt) { }
 		private static void Step(FakeAnimation a, float dt)
 		{
 			foreach (var s in a.__states.ToArray()) { if (s != null) { } }

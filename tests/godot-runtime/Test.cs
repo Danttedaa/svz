@@ -157,6 +157,9 @@ public partial class Test : Node
 		Check(Engine.MaxFps == 60, $"engine capped at 60 (MaxFps={Engine.MaxFps})");
 		Check(Cfg("target_fps").AsInt32() == 60, "60 saved");
 		Check(mNotes.Contains("Frame rate: 60 FPS"), "player notified of switch");
+		FramePacing.OnLevelLoaded();
+		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.EffectiveFps == 60,
+			"new level does not override manually selected 60 FPS");
 
 		// 5-finger hold -> FPS overlay
 		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 5);
@@ -176,6 +179,18 @@ public partial class Test : Node
 		// game's own targetFrameRate request must not override the player
 		FramePacing.GameRequested(30);
 		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60, "game request ignored");
+
+		// New level restarts the chosen 120 FPS target, without reloading config or restarting the app.
+		FramePacing.OnLevelLoaded();
+		Check(!FramePacing.FallenBack && FramePacing.EffectiveFps == 120,
+			"new level retries original 120 FPS target");
+		Check(Engine.MaxFps == 120, "new level restores explicit 120 FPS cap");
+		Check(Cfg("target_fps").AsInt32() == 120,
+			"new level retry does not rewrite persisted player setting");
+		// Still-overloaded hardware can fall back again after the normal slow windows.
+		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
+		Check(FramePacing.FallenBack && FramePacing.EffectiveFps == 60,
+			"new level retry does not prevent fallback when load remains high");
 
 		Check(FramePacing.AndroidApiForRelease(17) == 37 && FramePacing.AndroidApiForRelease(11) == 30, "Android API mapping");
 

@@ -629,7 +629,16 @@ internal static class Program
 			i.Operand is MethodReference r && r.Name == name && r.DeclaringType.FullName == "Svz.UiText" && r.DeclaringType.Scope.Name == Enh);
 		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
 		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
-		return Calls(drawText, "DrawGlyph") && Calls(draw, "BeginHaloPass") && Calls(draw, "EndHaloPass") &&
+		// The extra pass must be truly optional. Without this branch, disabling
+		// contrast draws every original glyph twice even though it draws no halo.
+		var begin = draw.Body.Instructions.FirstOrDefault(i => Calls(i, "Svz.UiText", "BeginHaloPass"));
+		var skip = begin?.Next;
+		bool guarded = skip != null &&
+			(skip.OpCode == OpCodes.Brfalse || skip.OpCode == OpCodes.Brfalse_S) &&
+			skip.Operand is Instruction target &&
+			draw.Body.Instructions.Contains(target) &&
+			draw.Body.Instructions.SkipWhile(i => i != target).Skip(1).Take(5).Any(i => Calls(i, canvas.FullName, "DrawText"));
+		return Calls(drawText, "DrawGlyph") && Calls(draw, "BeginHaloPass") && Calls(draw, "EndHaloPass") && guarded &&
 			!drawText.Body.Instructions.Any(i => (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
 				i.Operand is MethodReference r && r.Name == "DrawTextureRectRegion");
 	}

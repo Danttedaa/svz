@@ -111,14 +111,27 @@ else
   # stage 1: normal start
   adb logcat -c
   start_app start
-  sleep "$wait_s"
-  pid=$(adb shell pidof "$pkg" | tr -d '\r')
+  # Poll once partway through instead of only after the full wait. This
+  # distinguishes an app that never starts from one that exits later.
+  early_wait=10
+  if [ "$wait_s" -lt "$early_wait" ]; then early_wait="$wait_s"; fi
+  sleep "$early_wait"
+  early_pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r')
+  if [ "$wait_s" -gt "$early_wait" ]; then sleep "$((wait_s - early_wait))"; fi
+  pid=$(adb shell pidof "$pkg" 2>/dev/null | tr -d '\r')
+  note "start: pid at ${early_wait}s=${early_pid:-none}, at ${wait_s}s=${pid:-none}"
   adb exec-out screencap -p > "$out/screenshot.png" 2>/dev/null || rm -f "$out/screenshot.png"
   adb logcat -d > "$out/logcat.txt"
   [ -n "$pid" ] || fail+=("app not running after ${wait_s}s")
   if [ -z "$pid" ]; then
     note "start: emulator booted, package installed; possible startup regression or delayed initialization"
     note "start: launcher output: $(tail -6 "$out/launch-start.txt" 2>/dev/null | tr '\n' ' ' | cut -c1-280)"
+    # Android historical exit reason is best-effort diagnostic evidence, not
+    # permission to ignore a missing process or silently relaunch the game.
+    if command -v timeout >/dev/null 2>&1; then
+      exit_summary=$(timeout 8s adb shell dumpsys activity exit-info "$pkg" 2>/dev/null | tail -n 18 | tr '\n' ' ' | cut -c1-1200 || true)
+      [ -z "$exit_summary" ] || note "start: Android process exit report: $exit_summary"
+    fi
   fi
   grep -q "\[svz-fps\] settings:" "$out/logcat.txt" || fail+=("no [svz-fps] start line (SvzEnhanced.dll not loaded?)")
   grep -q "\[svz\] data:" "$out/logcat.txt" || fail+=("game data did not load ([svz] data: line missing)")

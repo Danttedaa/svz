@@ -191,3 +191,21 @@ The patch changes no font assets, colours, hitboxes or legacy GUI layout.
 **Visual verification is required** on Shop, Allies, tutorial and victory
 screens: sharper bitmap sources do not guarantee improved contrast or
 identical font size. If text clips or degrades, revert this experiment.
+
+## Milestone 8 — allocation reduction for animation and particles (draft)
+
+The shipped restoration's `AnimationSystem.Step` and
+`AnimationSystem.FinishStates` each call `List<AnimationState>.ToArray()`,
+and `Particles.Update` does the same for emitters. These hot synchronous
+foreach loops allocate fresh arrays even when the lists are unchanged, at up
+to 120 frames per second.
+
+The patcher now replaces **only these three known call sites** with generic
+`ArraySnapshots.Snapshot<T>(List<T>)`, which maintains a weak-key,
+exact-length reusable buffer per list. The array order and contents are
+refreshed each call, including after list count changes. The patcher rejects
+an unexpected IL sequence, and stand-in plus pure C# tests check behavior.
+No enemy logic, rewards, textures, or visuals are changed.
+
+This is a targeted **allocation** optimization, not yet a measured FPS gain:
+compare on-device before and after during a similarly effect-heavy wave.

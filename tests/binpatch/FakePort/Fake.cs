@@ -123,3 +123,34 @@ internal sealed class FontSetFinder
 		return best.ToString();
 	}
 }
+
+
+namespace Svz
+{
+	// Stand-in iteration shapes only; no proprietary particle/animation data.
+	public class FakeParticleEmitter { }
+	public class FakeAnimationState { }
+	public class FakeAnimation
+	{
+		internal readonly System.Collections.Generic.List<FakeAnimationState> __states = new();
+	}
+	public static class Particles
+	{
+		public static readonly System.Collections.Generic.List<FakeParticleEmitter> Emitters = new();
+		public static void Update(float dt)
+		{
+			foreach (var e in Emitters.ToArray()) { if (e != null) { } }
+		}
+	}
+	public static class AnimationSystem
+	{
+		private static void Step(FakeAnimation a, float dt)
+		{
+			foreach (var s in a.__states.ToArray()) { if (s != null) { } }
+		}
+		private static void FinishStates(FakeAnimation a)
+		{
+			foreach (var s in a.__states.ToArray()) { if (s != null) { } }
+		}
+	}
+}

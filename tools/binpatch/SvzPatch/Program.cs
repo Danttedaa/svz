@@ -137,6 +137,11 @@ internal static class Program
 		Require(fontChoose.Parameters[0].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32>",
 			"FontSetFinder list parameter");
 		var fontSelect = M(fontRef, "SelectResolution", ts.String, fontChoose.Parameters[0].ParameterType, ts.Int32);
+		var snaps = enhanced.GetType("Svz.ArraySnapshots") ?? throw new PatchException("ArraySnapshots missing");
+		Require(snaps.Methods.Any(x => x.Name == "Snapshot" && x.IsPublic && x.IsStatic &&
+			x.GenericParameters.Count == 1 && x.Parameters.Count == 1),
+			"ArraySnapshots.Snapshot<T>(List<T>) required");
+
 		var screenHeight = module.ImportReference(Method(module, "UnityEngine.Screen", "get_height", 0));
 
 		var actionCtor = new MethodReference(".ctor", ts.Void, actionString) { HasThis = true };
@@ -220,6 +225,7 @@ internal static class Program
 		PatchWinDelay(module, realtimeWait);
 		PatchStuckCorpses(module, shouldRemove);
 		PatchFontSelection(module, fontSelect, screenHeight);
+		PatchSnapshots(module, asmRef);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
@@ -358,6 +364,67 @@ internal static class Program
 			r.DeclaringType.Scope.Name == Enh && r.Name == "SelectResolution") == 1;
 	}
 
+
+	// Both animation and particle update loops used List<T>.ToArray() every
+	// frame to permit safe mutation while iterating. Replace only those three
+	// immediate foreach snapshots with same-length reusable buffers.
+	private static readonly (string type, string name, int paramsCount)[] SnapshotSites =
+	{
+		("Svz.Particles", "Update", 1),
+		("Svz.AnimationSystem", "Step", 2),
+		("Svz.AnimationSystem", "FinishStates", 1),
+	};
+
+	private static bool IsListToArray(Instruction i) =>
+		(i.OpCode == OpCodes.Callvirt || i.OpCode == OpCodes.Call) &&
+		i.Operand is MethodReference m && m.Name == "ToArray" && m.Parameters.Count == 0 &&
+		m.DeclaringType is GenericInstanceType list &&
+		list.ElementType.FullName == "System.Collections.Generic.List`1" &&
+		list.GenericArguments.Count == 1 && m.ReturnType is ArrayType;
+
+	private static bool IsSnapshotHook(Instruction i) =>
+		i.OpCode == OpCodes.Call && i.Operand is MethodReference m &&
+		m.Name == "Snapshot" && m.DeclaringType.FullName == "Svz.ArraySnapshots" &&
+		m.DeclaringType.Scope.Name == Enh;
+
+	private static void PatchSnapshots(ModuleDefinition module, AssemblyNameReference asmRef)
+	{
+		var helper = new TypeReference("Svz", "ArraySnapshots", module, asmRef);
+		foreach (var (type, name, count) in SnapshotSites)
+		{
+			var method = Method(module, type, name, count);
+			method.Body.SimplifyMacros();
+			var toArrays = method.Body.Instructions.Where(IsListToArray).ToArray();
+			Require(toArrays.Length == 1, type + "." + name + " has exactly one List<T>.ToArray foreach snapshot");
+			var call = toArrays[0];
+			Require(call.Next?.OpCode == OpCodes.Stloc,
+				type + "." + name + " snapshot is immediately stored in a foreach local");
+
+			var old = (MethodReference)call.Operand;
+			var instance = (GenericInstanceType)old.DeclaringType;
+			var open = new MethodReference("Snapshot", module.TypeSystem.Object, helper) { HasThis = false };
+			var generic = new GenericParameter("T", open);
+			open.GenericParameters.Add(generic);
+			open.ReturnType = new ArrayType(generic);
+			var list = new GenericInstanceType(instance.ElementType);
+			list.GenericArguments.Add(generic);
+			open.Parameters.Add(new ParameterDefinition(list));
+			var concrete = new GenericInstanceMethod(open);
+			concrete.GenericArguments.Add(instance.GenericArguments[0]);
+			call.OpCode = OpCodes.Call;
+			call.Operand = concrete;
+			method.Body.OptimizeMacros();
+		}
+		Require(SnapshotsPatched(module), "hot-path snapshot calls not all patched");
+	}
+
+	private static bool SnapshotsPatched(ModuleDefinition module) =>
+		SnapshotSites.All(site =>
+		{
+			var instructions = Method(module, site.type, site.name, site.paramsCount).Body.Instructions;
+			return instructions.Count(IsSnapshotHook) == 1 && !instructions.Any(IsListToArray);
+		});
+
 	/// Every member reference into SvzEnhanced must match a public static method there (name, return, parameters).
 	private static bool Resolves(string patched, string enhancedPath)
 	{
@@ -396,6 +463,7 @@ internal static class Program
 			("PostWinDelay uses unscaled real-time wait", WinDelayPatched(m)),
 			("dying enemy cleanup has safe timeout", StuckCorpsesPatched(m)),
 			("font selector uses optional HD atlas policy", FontSelectionPatched(m)),
+			("animation and particles use reusable snapshots", SnapshotsPatched(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

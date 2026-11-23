@@ -20,6 +20,11 @@ namespace Svz
         private const double ReportSeconds = 5.0;
         // Startup/loading and driver stalls must not dominate steady-state crowd timings.
         private const double MaxSampleSeconds = 0.25;
+        // Full per-renderer timing on every frame adds overhead precisely when
+        // hundreds of allies are fighting. Profile 1/8 frames instead.
+        private const int SampleStride = 8;
+        private static int sFrameNumber;
+        private static bool sSampleThisFrame;
         private static long sRenderStart;
         private static long sGuiStart;
         private static long sReportAt;
@@ -38,7 +43,7 @@ namespace Svz
         {
             sFrameSkinTicks = sFrameParticleTicks = 0;
             sFrameSkinCount = sFrameParticleCount = 0;
-            sRenderStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+            sRenderStart = sSampleThisFrame ? Stopwatch.GetTimestamp() : 0;
         }
 
         public static void EndRender()
@@ -66,9 +71,14 @@ namespace Svz
 
         // Animation and particle simulation may dominate crowd battles even when
         // render synchronization is cheap. Measure them separately without modifying dt.
-        public static void BeginAnimation() => sAnimStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+        public static void BeginAnimation()
+        {
+            sFrameNumber++;
+            sSampleThisFrame = FramePacing.Settings.LogStats && (sFrameNumber % SampleStride == 0);
+            sAnimStart = sSampleThisFrame ? Stopwatch.GetTimestamp() : 0;
+        }
         public static void EndAnimation() => RecordSample(ref sAnimStart, ref sAnimTicks, ref sAnimCount);
-        public static void BeginParticleSim() => sParticleSimStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+        public static void BeginParticleSim() => sParticleSimStart = sSampleThisFrame ? Stopwatch.GetTimestamp() : 0;
         public static void EndParticleSim() => RecordSample(ref sParticleSimStart, ref sParticleSimTicks, ref sParticleSimCount);
 
         private static void RecordSample(ref long start, ref long total, ref int count)
@@ -86,7 +96,7 @@ namespace Svz
         // Type classification is cached so it is not repeated for every ally/frame.
         public static void BeginRenderer(object renderer)
         {
-            if (!FramePacing.Settings.LogStats) { sRendererStart = 0; return; }
+            if (!sSampleThisFrame) { sRendererStart = 0; return; }
             Type type = renderer?.GetType();
             int kind = 0;
             if (type != null)
@@ -114,23 +124,25 @@ namespace Svz
 
         public static void BeginGui()
         {
-            sGuiStart = FramePacing.Settings.LogStats ? Stopwatch.GetTimestamp() : 0;
+            sGuiStart = sSampleThisFrame ? Stopwatch.GetTimestamp() : 0;
         }
 
         public static void EndGui()
         {
-            if (sGuiStart == 0) return;
             long now = Stopwatch.GetTimestamp();
-            long ticks = now - sGuiStart;
-            sGuiStart = 0;
-            if (ticks >= 0)
+            if (sGuiStart != 0)
             {
-                if ((double)ticks / Stopwatch.Frequency > MaxSampleSeconds) sIgnoredGuiHitches++;
-                else
+                long ticks = now - sGuiStart;
+                sGuiStart = 0;
+                if (ticks >= 0)
                 {
-                    sGuiTicks += ticks;
-                    sGuiMax = Math.Max(sGuiMax, ticks);
-                    sGuiCount++;
+                    if ((double)ticks / Stopwatch.Frequency > MaxSampleSeconds) sIgnoredGuiHitches++;
+                    else
+                    {
+                        sGuiTicks += ticks;
+                        sGuiMax = Math.Max(sGuiMax, ticks);
+                        sGuiCount++;
+                    }
                 }
             }
             if (sReportAt == 0) sReportAt = now;
@@ -148,7 +160,7 @@ namespace Svz
                     "Render {0:0.0}ms | Skin {1:0.0} FX {2:0.0} UI {3:0.0}ms\nAnim {4:0.0} PartSim {5:0.0}ms (CPU)",
                     renderAvg, skinAvg, fxAvg, guiAvg, animAvg, simAvg);
                 GD.Print(string.Format(CultureInfo.InvariantCulture,
-                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} skin={6:0.00}ms ({7:0.0}/frame) fx={8:0.00}ms ({9:0.0}/frame) excluded_hitches={10}/{11} anim={12:0.00}ms sim={13:0.00}ms (CPU-thread wall time; GPU not included)",
+                    "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} skin={6:0.00}ms ({7:0.0}/sample) fx={8:0.00}ms ({9:0.0}/sample) excluded_hitches={10}/{11} anim={12:0.00}ms sim={13:0.00}ms sample_stride=8 (CPU-thread wall time; GPU not included)",
                     renderAvg, sRenderMax * ms, sRenderCount, guiAvg, sGuiMax * ms, sGuiCount,
                     skinAvg, (double)sSkinnedCount / sRenderCount, fxAvg, (double)sParticleCount / sRenderCount,
                     sIgnoredRenderHitches, sIgnoredGuiHitches, animAvg, simAvg));

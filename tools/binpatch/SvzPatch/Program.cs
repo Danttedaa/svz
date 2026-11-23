@@ -82,6 +82,11 @@ internal static class Program
 			"BeginAnimation", "EndAnimation", "BeginParticleSim", "EndParticleSim" })
 			Expect(perf, name, $"::{name}()");
 		Expect(perf, "BeginRenderer", "::BeginRenderer(System.Object)");
+		var particleReuse = enhanced.GetType("Svz.ParticleArrayReuse") ?? throw new PatchException("ParticleArrayReuse missing");
+		Require(particleReuse.Methods.Any(x => x.Name == "Reuse" && x.IsPublic && x.IsStatic &&
+			x.GenericParameters.Count == 1 && x.Parameters.Count == 2 &&
+			x.Parameters[0].ParameterType.FullName == "System.Int32"),
+			"ParticleArrayReuse.Reuse<T>(int,T[]) missing");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -248,6 +253,7 @@ internal static class Program
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 		PatchRenderTiming(module, perfRef);
 		PatchRendererTiming(module, perfRef);
+		PatchParticleArrayReuse(module, new TypeReference("Svz", "ParticleArrayReuse", module, asmRef));
 		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
@@ -704,6 +710,77 @@ internal static class Program
 		body.OptimizeMacros();
 	}
 
+	// Avoid allocating three new arrays for *every* particle renderer on *every*
+	// frame when its particle count has not changed. This patch preserves the
+	// original BuildMesh loop, UV generation, color calculations and geometry.
+	// All array elements are overwritten by BuildMesh before the Godot upload.
+	// Only the first Vector3, Vector2 and Color newarr call sites are targeted;
+	// the trailing empty normals array remains unchanged.
+	private static void PatchParticleArrayReuse(ModuleDefinition module, TypeReference helper)
+	{
+		var m = Method(module, "Svz.Particles", "BuildMesh", 2);
+		Require(m.ReturnType.FullName == "UnityEngine.Mesh", "BuildMesh returns a mesh");
+		var renderer = module.GetType("UnityEngine.ParticleRenderer") ?? throw new PatchException("ParticleRenderer missing");
+		var meshType = module.GetType("UnityEngine.Mesh") ?? throw new PatchException("Mesh missing");
+		Require(renderer.Fields.Any(x => x.Name == "__pmesh" && x.FieldType.FullName == meshType.FullName),
+			"ParticleRenderer owns a private mesh");
+		m.Body.SimplifyMacros();
+		var instructions = m.Body.Instructions;
+		var meshLoads = instructions.Where(i => i.OpCode == OpCodes.Ldfld && i.Operand is FieldReference fr &&
+			fr.Name == "__pmesh" && fr.DeclaringType.FullName == renderer.FullName).ToList();
+		Require(meshLoads.Count == 1 && meshLoads[0].Next?.OpCode == OpCodes.Stloc &&
+			meshLoads[0].Next.Operand is VariableDefinition,
+			"BuildMesh reads renderer.__pmesh into exactly one local");
+		var meshLocal = (VariableDefinition)meshLoads[0].Next.Operand;
+		var il = m.Body.GetILProcessor();
+		var kinds = new[]
+		{
+			("UnityEngine.Vector3", "__v"),
+			("UnityEngine.Vector2", "__uv"),
+			("UnityEngine.Color", "__c"),
+		};
+		int previousIndex = -1;
+		foreach (var (typeName, fieldName) in kinds)
+		{
+			var hits = instructions.Where(i => i.OpCode == OpCodes.Newarr &&
+				i.Operand is TypeReference t && t.FullName == typeName).ToList();
+			Require(hits.Count >= 1, "BuildMesh allocates a " + typeName + " buffer");
+			var allocation = hits[0];
+			int index = instructions.IndexOf(allocation);
+			Require(index > previousIndex, "BuildMesh arrays allocated in Vector3/Vector2/Color order");
+			previousIndex = index;
+			var member = meshType.Fields.SingleOrDefault(f => f.Name == fieldName &&
+				f.FieldType is ArrayType array && array.ElementType.FullName == typeName);
+			Require(member != null, "Mesh." + fieldName + " matches allocated element type");
+			var element = (TypeReference)allocation.Operand;
+			var open = new MethodReference("Reuse", module.TypeSystem.Void, helper) { HasThis = false };
+			var generic = new GenericParameter("T", open);
+			open.GenericParameters.Add(generic);
+			open.ReturnType = new ArrayType(generic);
+			open.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+			open.Parameters.Add(new ParameterDefinition(new ArrayType(generic)));
+			var instantiated = new GenericInstanceMethod(open);
+			instantiated.GenericArguments.Add(element);
+			// Original IL stack already contains the requested array length.
+			// Append this renderer's previous array before calling Reuse<T>.
+			il.InsertBefore(allocation, il.Create(OpCodes.Ldloc, meshLocal));
+			il.InsertBefore(allocation, il.Create(OpCodes.Ldfld, member));
+			allocation.OpCode = OpCodes.Call;
+			allocation.Operand = instantiated;
+		}
+		m.Body.OptimizeMacros();
+		Require(ParticleArrayReusePatched(module), "particle buffer reuse hooks not installed");
+	}
+
+	private static bool ParticleArrayReusePatched(ModuleDefinition module)
+	{
+		var m = Method(module, "Svz.Particles", "BuildMesh", 2);
+		return m.Body.Instructions.Count(i => i.OpCode == OpCodes.Call &&
+			i.Operand is GenericInstanceMethod call && call.Name == "Reuse" &&
+			call.DeclaringType.FullName == "Svz.ParticleArrayReuse" &&
+			call.DeclaringType.Scope.Name == Enh) == 3;
+	}
+
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
 	private static void PatchPerFrameLookups(ModuleDefinition module, TypeReference reuse)
@@ -831,6 +908,7 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
+			("reuses the prior mesh-owned particle arrays at equal sizes", ParticleArrayReusePatched(m)),
 			("animation, particle simulation, render and GUI phases are profiled", CallsEnh("Svz.Main", "_Process", 1, "BeginAnimation") &&
 				CallsEnh("Svz.Main", "_Process", 1, "EndAnimation") &&
 				CallsEnh("Svz.Main", "_Process", 1, "BeginParticleSim") &&

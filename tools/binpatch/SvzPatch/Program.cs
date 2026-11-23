@@ -625,7 +625,7 @@ internal static class Program
 	private static bool TextHaloPatched(ModuleDefinition module)
 	{
 		var canvas = GuiCanvas(module);
-		bool Calls(MethodDefinition m, string name) => m.Body.Instructions.Any(i => i.OpCode == OpCodes.Call &&
+		bool CallsUi(MethodDefinition m, string name) => m.Body.Instructions.Any(i => i.OpCode == OpCodes.Call &&
 			i.Operand is MethodReference r && r.Name == name && r.DeclaringType.FullName == "Svz.UiText" && r.DeclaringType.Scope.Name == Enh);
 		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
 		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
@@ -638,7 +638,7 @@ internal static class Program
 			skip.Operand is Instruction target &&
 			draw.Body.Instructions.Contains(target) &&
 			draw.Body.Instructions.SkipWhile(i => i != target).Skip(1).Take(5).Any(i => Calls(i, canvas.FullName, "DrawText"));
-		return Calls(drawText, "DrawGlyph") && Calls(draw, "BeginHaloPass") && Calls(draw, "EndHaloPass") && guarded &&
+		return CallsUi(drawText, "DrawGlyph") && CallsUi(draw, "BeginHaloPass") && CallsUi(draw, "EndHaloPass") && guarded &&
 			!drawText.Body.Instructions.Any(i => (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
 				i.Operand is MethodReference r && r.Name == "DrawTextureRectRegion");
 	}

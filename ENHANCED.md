@@ -150,3 +150,15 @@ executes nested iterators, so no engine or game-data rewrite is required.
   legacy duration inputs, and by stand-in Cecil patch tests.
 - Still must test the **actual APK** on the S25 Ultra for normal wins,
   rewards, save persistence and special ending behavior.
+
+## Milestone 5: phone-visible fallback diagnostics (draft)
+
+When the performance monitor decides that 120 FPS cannot be held, capture the
+**last measured 5-second window and display refresh rate before changing to
+60 FPS**. The optional five-finger FPS overlay then shows both the current
+60 FPS mode and the trigger, e.g. `Fallback from 120: 76.0 fps, 34% missed (slow), panel 120Hz`.
+This distinguishes heavy rendering from a Samsung 60 Hz / power-saving restriction
+without requiring a laptop or ADB logs.
+
+The original safe fallback thresholds and behavior are unchanged; diagnostics
+do not disable the fallback or force 120 FPS during overloaded combat.

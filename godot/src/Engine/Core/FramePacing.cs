@@ -37,6 +37,7 @@ namespace Svz
 		private static Action<string> sNotify;
 		private static FallbackMonitor sMonitor;
 		private static bool sFallenBack;
+		private static string sFallbackReport = "";
 		private static readonly HoldGesture sToggleFps = new HoldGesture(4, 1.5);
 		private static readonly HoldGesture sToggleOverlay = new HoldGesture(5, 1.5);
 		private static double sRecheckIn = -1, sPeriodic;
@@ -79,10 +80,15 @@ namespace Svz
 			if (sRoot == null) return;
 			if (Settings.FallbackEnabled && !sFallenBack && sMonitor.Feed(delta))
 			{
+				// Capture the panel rate and measured load BEFORE switching to fallback:
+				// after the switch, the overlay would otherwise report only stable 60Hz.
+				sFallbackReport = string.Format(CultureInfo.InvariantCulture,
+					"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
+					sMonitor.LastWindow, DisplayHz);
 				sFallenBack = true;
-				Log($"target {Settings.TargetFps} not held ({sMonitor.LastWindow}); falling back to {Settings.FallbackFps} for this session");
+				Log("fallback reason: " + sFallbackReport);
 				Apply("fallback");
-				sNotify?.Invoke($"{Settings.FallbackFps} FPS (device could not hold {Settings.TargetFps})");
+				sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
 			}
 			if (sToggleFps.Update(touchCount, delta))
 			{
@@ -107,6 +113,7 @@ namespace Svz
 			if (sRoot == null) return;
 			Settings.TargetFps = FrameSettings.Sanitize(fps, Settings.TargetFps);
 			sFallenBack = false;
+			sFallbackReport = "";
 			sMonitor.Retarget(Settings.TargetFps);
 			Save();
 			Apply(why);
@@ -319,6 +326,10 @@ namespace Svz
 			double fps = Godot.Engine.GetFramesPerSecond();
 			sOverlay.Text = string.Format(CultureInfo.InvariantCulture, "{0:0} FPS  {1:0.0} ms  {2:0}Hz  target {3}{4}",
 				fps, fps > 0 ? 1000.0 / fps : 0, DisplayHz, EffectiveFps, sFallenBack ? " (fallback)" : "");
+			// Phone-first diagnosis: no adb or laptop needed to inspect the conditions
+			// immediately before fallback. Shown only when the FPS overlay is enabled.
+			if (sFallenBack && !string.IsNullOrEmpty(sFallbackReport))
+				sOverlay.Text += "\nFallback " + sFallbackReport;
 		}
 
 		private static void Log(string msg) => GD.Print("[svz-fps] " + msg);

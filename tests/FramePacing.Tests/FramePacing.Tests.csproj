@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Off-device tests for the pure frame-pacing policy. No NuGet packages: `dotnet run` works offline. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
+  </ItemGroup>
+</Project>

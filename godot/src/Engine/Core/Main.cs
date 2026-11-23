@@ -29,7 +29,6 @@ namespace Svz
 			System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
 			System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
 			System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
-			Godot.Engine.MaxFps = 60;
 			foreach (var a in OS.GetCmdlineUserArgs())
 			{
 				if (a.StartsWith("--level=")) StartLevel = int.Parse(a.Substring(8));
@@ -45,6 +44,7 @@ namespace Svz
 			Gui = new CanvasLayer { Name = "Gui", Layer = 10 };
 			AddChild(Gui);
 			Display.Init(this);
+			FramePacing.Init(this, Toast.Show);   // SvZ Enhanced: 120 Hz target, 60 FPS fallback
 			AssetDb.Init();
 			Builtins.Init();
 			GD.Print($"[svz] data: {AssetDb.Files.Length} files, levels: {Application.levelCount}");
@@ -57,6 +57,8 @@ namespace Svz
 		private double mClock;
 		private double mKillAt = -1;
 		private Queue<double> mDumps;
+		// PC debug flags: read the command line once, not twice per frame
+		private static readonly bool sCorpses = OS.GetCmdlineUserArgs().Contains("--corpses"), sTraceCam = OS.GetCmdlineUserArgs().Contains("--trace-cam");
 
 		/// debug: kill every enemy (exercises death animations / melting)
 		private static void KillAll()
@@ -120,8 +122,8 @@ namespace Svz
 			}
 			if (mDumps != null && mDumps.Count > 0 && mClock >= mDumps.Peek()) { GD.Print($"[dump] ---- t={mDumps.Dequeue()}"); Dump(); }
 			if (mKillAt >= 0 && mClock >= mKillAt) { mKillAt = -1; KillAll(); }
-			if (OS.GetCmdlineUserArgs().Contains("--corpses") && Time.frameCount % 120 == 0) CountCorpses();
-			if (mKillAt == -1 && Camera.main != null && OS.GetCmdlineUserArgs().Contains("--trace-cam") && Time.frameCount % 10 == 0)
+			if (sCorpses && Time.frameCount % 120 == 0) CountCorpses();
+			if (mKillAt == -1 && sTraceCam && Camera.main != null && Time.frameCount % 10 == 0)
 			{
 				var ct = Camera.main.transform;
 				GD.Print($"[cam] t={mClock:0.00} pos={ct.position.x:0.000},{ct.position.y:0.000},{ct.position.z:0.000} euler={ct.eulerAngles.x:0.0000},{ct.eulerAngles.y:0.0000},{ct.eulerAngles.z:0.0000} parent={ct.parent?.name}");
@@ -144,19 +146,23 @@ namespace Svz
 				Prefs.Flush();
 			}
 			else if (what == NotificationApplicationResumed)
+			{
 				Runtime.Broadcast("OnApplicationPause", false);
+				FramePacing.OnResume();
+			}
 			if (what == NotificationWMCloseRequest)
 				Runtime.Broadcast("OnApplicationQuit", null);
 		}
 
 		public override void _Process(double delta)
 		{
+			FramePacing.Frame(delta, InputState.FingersDown);
 			if (Movie.Playing) { Movie.Update(); DebugAutomation(delta); return; }
 			float dt = Mathf.Min((float)delta, Time.__maxDt) * Time.__scale;
 			Time.__dt = dt;
 			Time.__unscaled += (float)delta;
 			Time.__time += dt;
-			Time.__smoothDt = Mathf.Lerp(Time.__smoothDt, dt, 0.1f);
+			Time.__smoothDt = FramePacingPolicy.SmoothDeltaTime(Time.__smoothDt, dt);   // was Lerp(.., 0.1f) per frame: 2x faster at 120 FPS
 			Time.__frame++;
 
 			InputState.BeginFrame();
@@ -231,6 +237,7 @@ namespace Svz
 			var built = AssetDb.LoadScene(level);
 			GD.Print($"[svz] level {level}: {built.Count} objects in {sw.ElapsedMilliseconds} ms");
 			Runtime.Broadcast("OnLevelWasLoaded", level);
+			FramePacing.OnLevelLoaded();
 			if (Main.Verbose) foreach (var mb in Runtime.Behaviours) GD.Print($"[svz]   mb {mb.GetType().Name} on {mb.gameObject?.name} awoken={mb.__awoken} en={mb.__enabled} active={mb.gameObject?.active} asset={mb.__isAsset}");
 			if (Main.Verbose) foreach (var g in built) GD.Print($"[svz]   go {g.name} comps={string.Join(",", g.__components.Select(c => c.GetType().Name))} active={g.active}");
 		}
@@ -259,6 +266,8 @@ namespace Svz
 		public static UnityEngine.Vector3 MousePosition;
 		public static string InputString = "";
 		private static string sPendingString = "";
+		/// Fingers currently on the screen (also while a movie plays, when BeginFrame does not run).
+		public static int FingersDown { get { int n = 0; foreach (var f in sFingers.Values) if (f.down && !f.ended) n++; return n; } }
 		public static bool AnyKey => sKeys.Count > 0 || sMouse.Any(b => b);
 		public static bool AnyKeyDown => sKeysDown.Count > 0 || sMouseDown.Any(b => b);
 

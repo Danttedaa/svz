@@ -114,7 +114,19 @@ namespace UnityEngine
 		internal Bounds __bounds;
 
 		partial void __Init() { }
-		public partial float length => __length >= 0 ? __length : (__length = __tracks.Count == 0 ? 0f : __tracks.Max(t => t.End));
+		public partial float length => __length >= 0 ? __length : (__length = __ComputeLength());
+
+		// Unity 3.4 still plays a legacy clip that has events but no curves (the shared tagged "dieexplode"
+		// clip: OnAnimStart at 0 s, OnAnimDone at 1/30 s). With a zero length its state never reaches
+		// normalizedTime 1 and its events never fire, so a zombie killed by an explosion, by the sonic
+		// attack or as the last enemy of a wave never vanished (frozen corpse). Such a clip lasts until
+		// its last event.
+		internal float __ComputeLength()
+		{
+			float curves = __tracks.Count == 0 ? 0f : __tracks.Max(t => t.End);
+			if (curves > 0f || __events.Count == 0) return curves;
+			return Math.Max(0f, __events.Max(e => e.__time));
+		}
 		public partial float frameRate => __rate;
 		public partial WrapMode wrapMode { get => __wrap; set => __wrap = value; }
 

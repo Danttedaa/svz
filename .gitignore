@@ -24,3 +24,20 @@ godot/icon.png
 godot/src/Engine/Stubs.g.cs.uid
 original/
 godot/video/
+# test build outputs
+tests/**/bin/
+tests/**/obj/
+tests/godot-runtime/.godot/
+tests/godot-runtime/.nuget/
+tests/godot-runtime/nuget.config
+# probe app build outputs
+tools/probe/.godot/
+tools/probe/bin/
+tools/probe/obj/
+tools/probe/nuget.config
+# binary patch tooling
+tools/binpatch/.cecil/
+tools/binpatch/**/bin/
+tools/binpatch/**/obj/
+tests/binpatch/**/bin/
+tests/binpatch/**/obj/

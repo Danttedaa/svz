@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Stand-in for SvZPort.dll: the same code shapes at every place tools/binpatch/SvzPatch patches
+       (copied from godot/src/Engine/Core/Main.cs and Impl/AppImpl.cs). No game code. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>SvZPort</AssemblyName>
+    <Nullable>disable</Nullable>
+    <Optimize>true</Optimize>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="GodotSharp" Version="4.7.2" />
+  </ItemGroup>
+</Project>

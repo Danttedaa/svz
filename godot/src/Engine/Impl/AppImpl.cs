@@ -49,7 +49,7 @@ namespace UnityEngine
 		public static partial string unityVersion => "3.4.2f3";
 		public static partial bool webSecurityEnabled => false;
 		public static partial string webSecurityHostUrl => "";
-		public static partial int targetFrameRate { get => Godot.Engine.MaxFps; set => Godot.Engine.MaxFps = value <= 0 ? 60 : value; }
+		public static partial int targetFrameRate { get => FramePacing.EffectiveFps; set => FramePacing.GameRequested(value); }   // SvZ Enhanced: player setting wins
 		public static partial SystemLanguage systemLanguage => Platform.Language();
 		private static ThreadPriority __p_backgroundLoadingPriority;
 		public static partial ThreadPriority backgroundLoadingPriority { get => __p_backgroundLoadingPriority; set => __p_backgroundLoadingPriority = value; }// The port never goes online.
@@ -100,7 +100,7 @@ namespace UnityEngine
 	public sealed partial class Screen
 	{
 		public static partial Resolution[] resolutions => new[] { currentResolution };
-		public static partial Resolution currentResolution => Resolution.__Make(width, height, 60);
+		public static partial Resolution currentResolution => Resolution.__Make(width, height, FramePacing.DisplayHz > 0 ? (int)Math.Round(FramePacing.DisplayHz) : 60);
 		private static bool __p_showCursor = true;
 		public static partial bool showCursor { get => __p_showCursor; set => __p_showCursor = value; }
 		private static bool __p_lockCursor;

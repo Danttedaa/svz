@@ -1,0 +1,247 @@
+# SvZ Enhanced from a prebuilt SvZ port APK (default: mesflit/svz release, pinned in svz-build.json).
+# Fastest route: no original game upload needed. Reuses the port's converted game data and compiled game code;
+# only adds the enhancement code (tools/binpatch in the engine repository). Lives in a PRIVATE repository.
+#
+#   1. stops unless this repository is private
+#   2. signing key: ci/ensure_key.sh (created on the first run, stored only encrypted, certificate pinned)
+#   3. input: release "port-input" of THIS repository if present, else downloaded once from port_apk_url and
+#      kept there; SHA-256 and signer must match svz-build.json
+#   4. tools/binpatch/build_from_port.sh from the engine commit: patch, repackage, sign, verify
+#   5. emulator smoke test (Android x86_64 emulator on the runner; NOT the phone): install, start, logs, screenshot
+#   6. publishes the APK as a release of THIS repository; reports to the issue "Build status"
+name: Build SvZ Enhanced APK (from port)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "11 3 * * *"
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: >-
+          Optional engine commit/branch to build instead of svz-build.json's engine_ref. Rollback: enter
+          45d610042402d52527cbfbd1d28a71bfdd64dceb (the v1003 engine): it is rebuilt with a NEW, higher
+          versionCode and the same key, so it installs over any newer build and keeps your save.
+        required: false
+        default: ""
+  repository_dispatch:
+    types: [engine-updated]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  KEYFILE: signing/release-key.p12.enc
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Refuse to run in a public repository
+        if: ${{ github.event.repository.private != true }}
+        run: |
+          echo "::error::This workflow handles game data and the signing key. Private repositories only."
+          exit 1
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Configuration
+        id: cfg
+        run: |
+          python3 -I ci/config.py validate
+          for k in engine_repo engine_ref package app_name version_code_base keep_builds port_apk_url port_apk_sha256 port_signer_sha256; do
+            echo "$k=$(python3 -I ci/config.py get $k)" >> "$GITHUB_OUTPUT"
+          done
+          git config user.name "svz-build"; git config user.email "svz-build@users.noreply.github.com"
+          echo "STATUS=$RUNNER_TEMP/status.md" >> "$GITHUB_ENV"
+          echo "# SvZ Enhanced build ${{ github.run_number }} (from port APK)" > "$RUNNER_TEMP/status.md"
+
+      - name: Signing key
+        id: key
+        env:
+          SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+        run: bash ci/ensure_key.sh
+
+      - name: Engine commit
+        id: engine
+        if: steps.key.outputs.ready == 'true'
+        env:
+          REPO: ${{ steps.cfg.outputs.engine_repo }}
+          REF: ${{ github.event.inputs.engine_ref || github.event.client_payload.ref || steps.cfg.outputs.engine_ref }}
+        run: |
+          sha=$(git ls-remote "https://github.com/$REPO" "refs/heads/$REF" "refs/tags/$REF^{}" "refs/tags/$REF" | head -1 | cut -f1)
+          if [ -z "$sha" ] && [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then sha="$REF"; fi
+          [ -n "$sha" ] || { echo "- ❌ Cannot find engine $REPO@$REF" >> "$STATUS"; exit 1; }
+          short=${sha:0:12}
+          built=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -c -- "-$short\$" || true)
+          skip=false; [ "${{ github.event_name }}" = schedule ] && [ "$built" != 0 ] && skip=true
+          { echo "sha=$sha"; echo "short=$short"; echo "ref=$REF"; echo "skip=$skip"; } >> "$GITHUB_OUTPUT"
+          [ "$skip" = false ] || echo "- ✅ Engine $REPO@$short is already built; nothing to do." >> "$STATUS"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        with:
+          repository: ${{ steps.cfg.outputs.engine_repo }}
+          ref: ${{ steps.engine.outputs.sha }}
+          path: engine
+          persist-credentials: false
+
+      - name: Port APK (private copy "port-input", else pinned download)
+        id: port
+        if: steps.engine.outputs.sha != '' && steps.engine.outputs.skip != 'true'
+        env:
+          URL: ${{ steps.cfg.outputs.port_apk_url }}
+          SHA: ${{ steps.cfg.outputs.port_apk_sha256 }}
+          SIGNER: ${{ steps.cfg.outputs.port_signer_sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/port"; apk="$RUNNER_TEMP/port/port.apk"
+          if gh release download port-input --repo "$GITHUB_REPOSITORY" --pattern port.apk --dir "$RUNNER_TEMP/port" 2>/dev/null; then
+            src="private copy"
+          else
+            [ -n "$URL" ] || { echo "- ❌ No port APK: set port_apk_url in svz-build.json" >> "$STATUS"; exit 1; }
+            curl -fsSL --retry 3 -o "$apk" "$URL"; src="downloaded"
+          fi
+          echo "$SHA  $apk" | sha256sum -c --quiet || { echo "- ❌ Port APK SHA-256 does not match svz-build.json" >> "$STATUS"; exit 1; }
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          signer=$("$apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr a-f A-F)
+          [ -z "$SIGNER" ] || [ "$signer" = "$SIGNER" ] || { echo "- ❌ Port APK signer $signer is not the pinned one" >> "$STATUS"; exit 1; }
+          if [ "$src" = downloaded ]; then
+            gh release create port-input --repo "$GITHUB_REPOSITORY" --title "Port APK input (private copy)" \
+              --notes "Pinned input for build-from-port.yml. SHA-256 $SHA, signer $signer. Never publish." "$apk"
+          fi
+          echo "- ✅ Port APK ($src): SHA-256 \`${SHA:0:16}…\`, signer \`${signer:0:16}…\`" >> "$STATUS"
+          { echo "apk=$apk"; echo "apksigner=$apksigner"; echo "zipalign=$(dirname "$apksigner")/zipalign"; } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        if: steps.port.outputs.apk != ''
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Patch, repackage, sign, verify
+        id: build
+        if: steps.port.outputs.apk != ''
+        working-directory: engine
+        env:
+          SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+          PACKAGE: ${{ steps.cfg.outputs.package }}
+          APP_NAME: ${{ steps.cfg.outputs.app_name }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet androguard==4.1.4
+          export SVZ_PY="$RUNNER_TEMP/venv/bin/python"
+          vc=$(( ${{ steps.cfg.outputs.version_code_base }} + ${{ github.run_number }} ))
+          out="$RUNNER_TEMP/out/SvZ-Enhanced-$vc-${{ steps.engine.outputs.short }}.apk"
+          tools/binpatch/build_from_port.sh "${{ steps.port.outputs.apk }}" "$out" \
+            --ks "$RUNNER_TEMP/key/release.p12" --ks-alias svz --ks-pass-env SVZ_KEY_PASSPHRASE \
+            --package "$PACKAGE" --label "$APP_NAME" --version-code "$vc" \
+            --apksigner "${{ steps.port.outputs.apksigner }}" --zipalign "${{ steps.port.outputs.zipalign }}"
+          cert=$("${{ steps.port.outputs.apksigner }}" verify --print-certs "$out" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr a-f A-F)
+          [ "$cert" = "${{ steps.key.outputs.cert }}" ] || { echo "- ❌ APK signed with an unexpected certificate" >> "$STATUS"; exit 1; }
+          "$SVZ_PY" -I -c "import json; [print(f\"- {'✅' if r['passed'] else '❌'} {r['check']}: {r['detail'][:120]}\") for r in json.load(open('$out.verify.json'))['results']]" >> "$STATUS"
+          { echo "apk=$out"; echo "version_code=$vc"; } >> "$GITHUB_OUTPUT"
+
+      - name: Preinstall Android 34 emulator image with retries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          # The emulator action occasionally fails with "Premature EOF" while
+          # downloading the Android 34 system image. Retry at the SDK layer.
+          # A failure here does not prevent the emulator action's own setup.
+          bash ci/install_emulator_sdk.sh
+
+      - name: Enable KVM for the emulator
+        if: steps.build.outcome == 'success'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+
+      - name: Emulator smoke test (x86_64 emulator, not the phone)
+        id: smoke
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disk-size: 6000M
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash engine/tools/binpatch/emulator_smoke.sh "${{ steps.build.outputs.apk }}" "${{ steps.cfg.outputs.package }}" "${{ runner.temp }}/smoke"
+
+      - name: Publish to this private repository
+        if: steps.build.outcome == 'success'
+        env:
+          APK: ${{ steps.build.outputs.apk }}
+          VC: ${{ steps.build.outputs.version_code }}
+          SHORT: ${{ steps.engine.outputs.short }}
+          KEEP: ${{ steps.cfg.outputs.keep_builds }}
+          SMOKE: ${{ steps.smoke.outcome }}
+        run: |
+          smoke_dir="$RUNNER_TEMP/smoke"; extra=()
+          # Make failed runs diagnosable without another APK build; all assets
+          # remain in this private repository.
+          for f in "$smoke_dir/screenshot.png" "$smoke_dir/screenshot-store.png" "$smoke_dir/screenshot-battle.png" \
+                   "$smoke_dir/smoke.txt" "$smoke_dir/install.txt" "$smoke_dir/details.txt"; do
+            [ ! -f "$f" ] || extra+=("$f")
+          done
+          for log in logcat logcat-store logcat-battle; do
+            if [ -f "$smoke_dir/$log.txt" ]; then
+              grep -E "svz|godot|AndroidRuntime|Exception|FATAL" "$smoke_dir/$log.txt" | tail -n 1500 > "$smoke_dir/$log-tail.txt"
+              extra+=("$smoke_dir/$log-tail.txt")
+            fi
+          done
+          if [ "$SMOKE" = success ]; then
+            echo "- ✅ Emulator smoke test passed (x86_64 emulator, not your phone): $(head -1 "$smoke_dir/smoke.txt" 2>/dev/null)" >> "$STATUS"
+          else
+            echo "- ❌ Emulator smoke test FAILED or was unavailable. APK is experimental; do not install as a verified update." >> "$STATUS"
+          fi
+          tag="apk-r${{ github.run_number }}-$SHORT"
+          { echo "Private build from the port APK, engine \`${{ steps.engine.outputs.ref }}\` @ \`$SHORT\`, versionCode $VC."
+            echo; echo "Installs next to the original port (package \`${{ steps.cfg.outputs.package }}\`). Later builds install over it and keep its save game."
+            echo; echo "Emulator smoke test: $SMOKE. 120 FPS is not verified until measured on the phone."
+            if [ "$SMOKE" != success ]; then
+              echo; echo "UNVERIFIED PRERELEASE — emulator failed or setup unavailable. Do not treat as tested."
+            fi; } > "$RUNNER_TEMP/notes.md"
+          # Failed emulator builds are tagged as prereleases, never as verified builds.
+          flags=()
+          if [ "$SMOKE" != success ]; then flags+=(--prerelease); fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "SvZ Enhanced $VC ($SHORT)" --notes-file "$RUNNER_TEMP/notes.md" \
+            "${flags[@]}" "$APK" "$APK.verify.json" "${extra[@]}"
+          echo "- 📦 **New APK:** release \`$tag\` → \`$(basename "$APK")\` (Releases of this repository)" >> "$STATUS"
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | grep -vxF -f <(python3 -I ci/config.py get keep_tags) \
+            | tail -n +$(( KEEP + 1 )) | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+
+      - name: Reject failed emulator smoke check
+        if: steps.build.outcome == 'success' && steps.smoke.outcome != 'success'
+        run: |
+          echo "::error::Emulator smoke test failed or did not start. Signed APK is published only as an unverified prerelease with available diagnostics."
+          exit 1
+
+      - name: Report to the "Build status" issue
+        if: always()
+        env:
+          SVZ_KEY_PASSPHRASE: ${{ secrets.SVZ_KEY_PASSPHRASE }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ "${{ job.status }}" = success ] || echo "- ❌ Run failed: see the run log." >> "$STATUS"
+          echo "" >> "$STATUS"; echo "[Run log]($RUN_URL) · $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$STATUS"
+          python3 -I -c "import os,sys; p=os.environ.get('SVZ_KEY_PASSPHRASE',''); t=open(sys.argv[1]).read(); open(sys.argv[1],'w').write(t.replace(p,'***') if p else t)" "$STATUS"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search 'in:title "Build status"' --json number --jq '.[0].number // empty')
+          if [ -z "$n" ]; then gh issue create --repo "$GITHUB_REPOSITORY" --title "Build status" --body-file "$STATUS" >/dev/null
+          else gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body-file "$STATUS" >/dev/null; fi
+
+      - name: Remove key and inputs from the runner
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/key" "$RUNNER_TEMP/port" "$RUNNER_TEMP/out"

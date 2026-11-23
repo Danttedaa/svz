@@ -1,0 +1,12 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../godot/src/Engine/Core/FramePacing.cs" Link="FramePacing.cs" />
+    <Compile Include="../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
+  </ItemGroup>
+</Project>

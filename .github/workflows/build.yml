@@ -1,8 +1,9 @@
 # Builds SvZ for Android, Windows, Linux and macOS.
 #
 # SvZ Enhanced: the APKs and archives built here contain the original game, so this workflow
-# refuses to run in a public repository and never publishes releases. Artifacts are kept for 3 days
-# and are visible only to people with access to the private repository it runs in.
+# refuses to run in a public repository and never publishes releases. For the enhanced Android
+# build use the private pipeline instead (template in ci/private/repo, see ci/private/README.md).
+# Artifacts are kept for 3 days and are visible only to people with access to the private repository.
 #
 # Needs repository secrets (Settings > Secrets and variables > Actions):
 #   SVZ_APK_URL       link to your original Samurai vs Zombies Defense 3.4.0 APK (a direct link, or a
@@ -32,7 +33,7 @@ jobs:
       - name: Refuse to run in a public repository
         if: ${{ github.event.repository.private != true }}
         run: |
-          echo "::error::This build embeds the original game; it only runs in private repositories."
+          echo "::error::This build embeds the original game; it only runs in private repositories (see ci/private/README.md)."
           exit 1
 
       - uses: actions/checkout@v4

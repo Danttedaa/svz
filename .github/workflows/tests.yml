@@ -1,0 +1,27 @@
+# Off-device tests for the SvZ Enhanced changes. Needs no game files and no secrets.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: ["enhanced/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Godot 4.7.2 (.NET, official build)
+        run: |
+          curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_linux_x86_64.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+      - name: Policy + headless Godot runtime tests
+        run: tests/run_tests.sh /tmp/godot/Godot_v4.7.2-stable_mono_linux_x86_64

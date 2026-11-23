@@ -156,6 +156,7 @@ namespace UnityEngine
         internal Vector3[] __v = Array.Empty<Vector3>();
         internal Vector2[] __uv = Array.Empty<Vector2>();
         internal Color[] __c = Array.Empty<Color>();
+        internal System.Collections.Generic.List<int[]> __subs = new() { Array.Empty<int>() };
     }
     public sealed class ParticleRenderer
     {
@@ -185,13 +186,16 @@ namespace Svz
             var v = new UnityEngine.Vector3[n * 4];
             var uv = new UnityEngine.Vector2[n * 4];
             var col = new UnityEngine.Color[n * 4];
+            var tri = new int[n * 6];
             for (int i = 0; i < n * 4; i++)
             {
                 v[i] = new UnityEngine.Vector3 { x = i + n };
                 uv[i] = new UnityEngine.Vector2 { x = i };
                 col[i] = new UnityEngine.Color { a = n };
             }
+            for (int i = 0; i < n * 6; i++) tri[i] = i;
             mesh.__v = v; mesh.__uv = uv; mesh.__c = col;
+            mesh.__subs = new System.Collections.Generic.List<int[]> { tri };
             return mesh;
         }
 		public static void Update(float dt)

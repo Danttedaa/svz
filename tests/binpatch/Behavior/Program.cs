@@ -54,6 +54,16 @@ static class Program
 		Check((int)gameT.GetProperty("Registered").GetValue(game) == 1 && (int)gameT.GetProperty("Finished").GetValue(game) == 1,
 			"RegisterWin and onFinishGameRequest each ran exactly once");
 
+		// 3. A completed wave must still record rewards without showing the
+		// obsolete market rating popup (even though the fake build is "google").
+		var resultsType = port.GetType("DebriefingImpl");
+		var results = Activator.CreateInstance(resultsType, true);
+		resultsType.GetMethod("DisplayStats", F).Invoke(results, null);
+		Check((int)resultsType.GetProperty("RewardChecks").GetValue(results) == 2,
+			"debrief rewards/statistics still execute");
+		Check((int)resultsType.GetProperty("RatingPrompts").GetValue(results) == 0,
+			"obsolete market rating prompt stays hidden");
+
 		Console.WriteLine($"[test] {passed} patched-behaviour checks passed");
 		return 0;
 	}

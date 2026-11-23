@@ -240,12 +240,56 @@ internal static class Program
 		PatchTextHalo(module, uiTextRef);
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
+		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
 		if (!Check(output)) throw new PatchException("patched file does not pass the check");
 	}
 
+
+
+	// The original game presents an obsolete incentivized market-rating dialog
+	// at fixed victory waves. Suppress ONLY its platform-type branches within
+	// DebriefingImpl.DisplayStats; leave achievements, coins, new unlocks and
+	// saved profile state untouched. The rating flag is not written to the save.
+	private static void SuppressLegacyRateMePrompt(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		var body = m.Body;
+		body.SimplifyMacros();
+		Require(body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "debrief_victory") &&
+			body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "CoinsGained"),
+			"rating branch must be in debrief stats with victory and coin award logic");
+		var expected = new[] { "amazon", "google" };
+		var matches = body.Instructions.Where(i => Calls(i, "ApplicationUtilities", "IsBuildType")).ToArray();
+		Require(matches.Length == expected.Length,
+			"exactly the amazon and google store-rating checks in DebriefingImpl.DisplayStats");
+		var sources = matches.Select(i => i.Previous?.OpCode == OpCodes.Ldstr ? i.Previous.Operand as string : null).ToArray();
+		Require(sources.SequenceEqual(expected), "rating checks must use literal amazon, google in order");
+		var il = body.GetILProcessor();
+		foreach (var call in matches)
+		{
+			// Original stack: [buildTypeString]; Pop consumes it, Ldc_I4_0
+			// supplies the false result expected by the original branch instruction.
+			call.OpCode = OpCodes.Pop;
+			call.Operand = null;
+			il.InsertAfter(call, il.Create(OpCodes.Ldc_I4_0));
+		}
+		body.OptimizeMacros();
+		Require(LegacyRatingSuppressed(module), "obsolete rating popup not suppressed");
+	}
+
+	private static bool LegacyRatingSuppressed(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		bool HasDisabledCheck(string buildType) => m.Body.Instructions.Any(i =>
+			i.OpCode == OpCodes.Ldstr && (i.Operand as string) == buildType &&
+			i.Next?.OpCode == OpCodes.Pop && i.Next.Next?.OpCode == OpCodes.Ldc_I4_0);
+		return HasDisabledCheck("amazon") && HasDisabledCheck("google") &&
+			!m.Body.Instructions.Any(i => Calls(i, "ApplicationUtilities", "IsBuildType")) &&
+			m.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (i.Operand as string) == "CoinsGained");
+	}
 
 	private static IEnumerable<TypeDefinition> Descendants(IEnumerable<TypeDefinition> types)
 	{
@@ -713,6 +757,7 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
+			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

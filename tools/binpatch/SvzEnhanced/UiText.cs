@@ -8,7 +8,7 @@ namespace Svz
 	/// Readable bitmap-font text for the port (Store, Allies, dialogs, HUD), binary-patch route.
 	///
 	/// Contrast: the patched GuiCanvas draws each GUIText twice. The first pass draws a soft halo: every glyph
-	/// at 8 small offsets from a white, alpha-only copy of its font atlas, tinted warm-light behind dark text
+	/// at 4 cardinal offsets from a white, alpha-only copy of its font atlas, tinted warm-light behind dark text
 	/// and dark behind light text. The second pass is the game's normal text. (The atlases carry the glyph
 	/// colour in RGB, so tinting the original atlas could only ever darken it.)
 	///
@@ -23,21 +23,21 @@ namespace Svz
 		public static bool Contrast = true;
 		private static bool sHaloPass, sLoaded;
 		private static ulong sOffsetFrame = ulong.MaxValue;
-		private static float sOffset = 1.5f;
+		private static float sOffset = 1f;
 		private static readonly HoldGesture sCycle = new HoldGesture(3, 2.0);
 
 		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance; }
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
 
-		/// Halo offset in pixels: 1.5 px at 1080 p, never below 1 px.
-		public static float HaloOffset(float screenHeight) => Math.Max(1f, screenHeight / 720f);
+		/// Narrow one-pixel outline at 1080p; avoid obscuring the thin legacy glyph interiors.
+		public static float HaloOffset(float screenHeight) => Math.Max(0.8f, screenHeight / 1080f);
 
 		/// Halo colour for the visible text colour (atlas luminance x modulate); null = no halo.
 		public static Color? HaloColor(Color modulate, float atlasLuminance) =>
 			UiFontQuality.HaloKind(modulate.R, modulate.G, modulate.B, modulate.A, atlasLuminance) switch
 			{
-				1 => new Color(1f, 0.94f, 0.78f, Math.Min(1f, modulate.A * 0.6f)),   // dark text: warm parchment halo
-				-1 => new Color(0f, 0f, 0f, Math.Min(1f, modulate.A * 0.65f)),       // light text: dark halo
+				1 => new Color(1f, 0.96f, 0.85f, Math.Min(1f, modulate.A * 0.55f)),   // dark text: warm parchment halo
+				-1 => new Color(0f, 0f, 0f, Math.Min(1f, modulate.A * 0.55f)),       // light text: dark halo
 				_ => null,
 			};
 
@@ -59,13 +59,16 @@ namespace Svz
 			ulong frame = (ulong)Engine.GetFramesDrawn();
 			if (frame != sOffsetFrame) { sOffsetFrame = frame; sOffset = HaloOffset(ViewHeight(self)); }
 			float o = sOffset;
-			for (int dx = -1; dx <= 1; dx++)
-				for (int dy = -1; dy <= 1; dy++)
-				{
-					if (dx == 0 && dy == 0) continue;
-					var r = new Rect2(rect.Position + new Vector2(dx * o, dy * o), rect.Size);
-					self.DrawTextureRectRegion(atlas.Texture, r, srcRect, halo, transpose, clipUv);
-				}
+			// Four short cardinal strokes replace eight diagonal+cardinal halo draws.
+			// Preserves the original glyph draw pass and text metrics, while halving
+			// halo submissions and avoiding a thick glow that fills glyph interiors.
+			for (int direction = 0; direction < 4; direction++)
+			{
+				float dx = direction == 0 ? -o : direction == 1 ? o : 0f;
+				float dy = direction == 2 ? -o : direction == 3 ? o : 0f;
+				var r = new Rect2(rect.Position + new Vector2(dx, dy), rect.Size);
+				self.DrawTextureRectRegion(atlas.Texture, r, srcRect, halo, transpose, clipUv);
+			}
 		}
 
 		/// White copy of a font atlas that keeps only its alpha (LA8: half the memory of RGBA), plus the

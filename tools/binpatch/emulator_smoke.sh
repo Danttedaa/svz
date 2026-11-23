@@ -116,4 +116,12 @@ fi
   cat "$out/details.txt"
 } > "$out/smoke.txt"
 cat "$out/smoke.txt"
+# Only on failure, surface the actual Android process-exit evidence in GitHub's
+# private workflow log; release assets keep full logcat for deeper diagnosis.
+# Do not hide a crash by relaunching or marking the build as verified.
+if [ ${#fail[@]} -ne 0 ] && [ -s "$out/logcat.txt" ]; then
+  echo "=== Android startup failure diagnostics (last matching lines) ==="
+  grep -Ei 'FATAL EXCEPTION|AndroidRuntime|Godot|svz|am_crash|am_kill|am_proc_died|ActivityManager|lowmemorykiller|OutOfMemory|SIGSEGV|signal 11|ANR|Force finishing|Force stopping' "$out/logcat.txt" \
+    | tail -n 90 || true
+fi
 [ ${#fail[@]} -eq 0 ]

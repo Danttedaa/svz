@@ -130,8 +130,14 @@ namespace Svz
 		/// overload does not cause repeated 120/60 Hz switching.
 		public static void OnLevelLoaded()
 		{
-			sMonitor?.Reset(); // loading hitches must not count against the target
-			if (!sFallenBack || sRoot == null) return;
+			if (!sFallenBack || sRoot == null)
+			{
+				sMonitor?.Reset(); // ignore loading hitches during an ordinary level change
+				return;
+			}
+			// Reset() alone does not clear FallbackMonitor.Triggered; use Retarget()
+			// so an overloaded new wave can safely fall back again.
+			sMonitor?.Retarget(Settings.TargetFps);
 			sFallenBack = false;
 			sFallbackReport = "";
 			Apply("new level retry");

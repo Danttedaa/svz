@@ -77,6 +77,9 @@ internal static class Program
 		Expect(fp, "GameRequested", "::GameRequested(System.Int32)");
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
+		var perf = enhanced.GetType("Svz.PerfTrace") ?? throw new PatchException("Svz.PerfTrace missing");
+		foreach (var name in new[] { "BeginRender", "EndRender", "BeginGui", "EndGui" })
+			Expect(perf, name, $"::{name}()");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -114,6 +117,7 @@ internal static class Program
 		var deathRef = new TypeReference("Svz", "DeathCleanup", module, asmRef);
 		var fontRef = new TypeReference("Svz", "UiFontQuality", module, asmRef);
 		var animFixRef = new TypeReference("Svz", "AnimationFixes", module, asmRef);
+		var perfRef = new TypeReference("Svz", "PerfTrace", module, asmRef);
 		var ts = module.TypeSystem;
 		var nodeRef = ExistingTypeRef(module, "Godot.Node");
 		var actionOpen = module.GetTypeReferences().FirstOrDefault(t => t.FullName == "System.Action`1");
@@ -240,6 +244,7 @@ internal static class Program
 		PatchTextHalo(module, uiTextRef);
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
+		PatchRenderTiming(module, perfRef);
 		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
@@ -630,6 +635,31 @@ internal static class Program
 	}
 
 
+	// Bracket the original no-argument calls without changing any game logic or return values.
+	// Fail closed on game versions whose _Process layout no longer matches.
+	private static void PatchRenderTiming(ModuleDefinition module, TypeReference perf)
+	{
+		var body = Method(module, "Svz.Main", "_Process", 1).Body;
+		body.SimplifyMacros();
+		var il = body.GetILProcessor();
+
+		void Bracket(string type, string method, string begin, string end)
+		{
+			var hits = body.Instructions.Where(i => Calls(i, type, method)).ToList();
+			Require(hits.Count == 1, $"Main._Process calls {type}.{method} exactly once");
+			var target = hits[0];
+			Require(target.OpCode == OpCodes.Call && target.Operand is MethodReference m &&
+				!m.HasThis && m.Parameters.Count == 0 && m.ReturnType.FullName == "System.Void",
+				$"{type}.{method} must be static void with no arguments");
+			MethodReference Hook(string hook) => new MethodReference(hook, module.TypeSystem.Void, perf) { HasThis = false };
+			il.InsertBefore(target, il.Create(OpCodes.Call, Hook(begin)));
+			il.InsertAfter(target, il.Create(OpCodes.Call, Hook(end)));
+		}
+		Bracket("Svz.Render", "Sync", "BeginRender", "EndRender");
+		Bracket("Svz.GuiSystem", "Frame", "BeginGui", "EndGui");
+		body.OptimizeMacros();
+	}
+
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
 	private static void PatchPerFrameLookups(ModuleDefinition module, TypeReference reuse)
@@ -757,6 +787,10 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
+			("crowd render and GUI phases are profiled", CallsEnh("Svz.Main", "_Process", 1, "BeginRender") &&
+				CallsEnh("Svz.Main", "_Process", 1, "EndRender") &&
+				CallsEnh("Svz.Main", "_Process", 1, "BeginGui") &&
+				CallsEnh("Svz.Main", "_Process", 1, "EndGui")),
 			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");

@@ -31,6 +31,9 @@ namespace Svz
 		public static string LastBridgeStatus { get; private set; } = "";
 		/// Last "stats ..." summary (5-second window), also written to the log.
 		public static string LastStats => sStats.Last;
+		/// Optional extra diagnostic line supplied by the binary-patch profiler.
+		/// This class is also compiled without the profiler in the full source build.
+		public static string ExtraPerfOverlay { get; set; } = "";
 		public static bool FallenBack => sFallenBack;
 		/// Called at the end of every Frame(delta, touchCount): lets other enhancements (binary-patch route)
 		/// add gestures without their own call site in the game.
@@ -336,6 +339,7 @@ namespace Svz
 			// immediately before fallback. Shown only when the FPS overlay is enabled.
 			if (sFallenBack && !string.IsNullOrEmpty(sFallbackReport))
 				sOverlay.Text += "\nFallback " + sFallbackReport;
+			if (!string.IsNullOrEmpty(ExtraPerfOverlay)) sOverlay.Text += "\n" + ExtraPerfOverlay;
 		}
 
 		private static void Log(string msg) => GD.Print("[svz-fps] " + msg);

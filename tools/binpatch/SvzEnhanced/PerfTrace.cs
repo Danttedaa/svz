@@ -63,10 +63,13 @@ namespace Svz
             if (sRenderCount > 0 && sGuiCount > 0)
             {
                 double ms = 1000.0 / Stopwatch.Frequency;
+                double renderAvg = sRenderTicks * ms / sRenderCount;
+                double guiAvg = sGuiTicks * ms / sGuiCount;
+                FramePacing.ExtraPerfOverlay = string.Format(CultureInfo.InvariantCulture,
+                    "Render {0:0.0}ms max {1:0.0} | UI {2:0.0}ms (CPU)", renderAvg, sRenderMax * ms, guiAvg);
                 GD.Print(string.Format(CultureInfo.InvariantCulture,
                     "[svz-perf] render-sync avg={0:0.00}ms max={1:0.00}ms n={2} gui avg={3:0.00}ms max={4:0.00}ms n={5} (CPU-thread wall time; GPU not included)",
-                    sRenderTicks * ms / sRenderCount, sRenderMax * ms, sRenderCount,
-                    sGuiTicks * ms / sGuiCount, sGuiMax * ms, sGuiCount));
+                    renderAvg, sRenderMax * ms, sRenderCount, guiAvg, sGuiMax * ms, sGuiCount));
             }
             sRenderTicks = sGuiTicks = sRenderMax = sGuiMax = 0;
             sRenderCount = sGuiCount = 0;

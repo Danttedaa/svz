@@ -1,8 +1,10 @@
 # Builds the SvZ Enhanced 120 Hz probe: a small Android app that runs the game's frame-pacing code
 # (godot/src/Engine/Core/FramePacing*.cs) without any game files, so 120 Hz support can be checked on a
 # phone before the game itself is built. Contains no Glu/game content.
-# Output: workflow artifact "svz-probe-apk" (7 days). Signed with a throwaway key made in this run:
-# uninstall the probe before installing a newer one.
+# Output: pre-release "probe-latest" of this repository (replaced on every build of an enhanced/** branch),
+# plus a 7-day workflow artifact. The probe contains NO game files: it is built only from tools/probe and
+# godot/src/Engine/Core/FramePacing*.cs (tests/tools/test_workflows.py enforces this). Signed with a throwaway
+# key made in each run: uninstall the probe before installing a newer one.
 name: Probe APK
 
 on:
@@ -14,7 +16,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: read   # only the publish job below may write, for the probe-latest release
 
 jobs:
   probe:
@@ -83,3 +85,28 @@ jobs:
             build/svz-probe.apk
             build/verify.json
           retention-days: 7
+
+  publish:
+    # only for pushes to this repository's enhanced/** branches (never for pull requests from forks)
+    needs: probe
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: svz-probe-apk
+          path: probe
+      - name: Replace the probe-latest pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f probe/svz-probe.apk
+          gh release delete probe-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          printf '%s\n' "SvZ Enhanced 120 Hz probe built from \`${GITHUB_SHA:0:12}\` (${GITHUB_REF_NAME})." "" \
+            "A test app for the frame-pacing code. Contains no game files. Uninstall an older probe first (each build has its own throwaway key)." > notes.md
+          gh release create probe-latest --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "120 Hz probe (no game files)" --notes-file notes.md probe/svz-probe.apk probe/verify.json
+

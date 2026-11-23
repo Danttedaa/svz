@@ -37,15 +37,35 @@ class PublicWorkflows(unittest.TestCase):
     def test_found(self):
         self.assertTrue(PUBLIC_WORKFLOWS)
 
+    RELEASE = re.compile(r"gh\s+release\s+(create|upload|edit)|action-gh-release|create-release"
+                         r"|api\.github\.com/repos/\S+/releases", re.I)
+    # The only public release: the probe app, built solely from tools/probe + FramePacing*.cs (no game files).
+    PROBE = "probe-apk.yml"
+
     def test_no_release_publishing(self):
-        pattern = re.compile(r"gh\s+release\s+(create|upload|edit)|action-gh-release|create-release"
-                             r"|api\.github\.com/repos/\S+/releases", re.I)
         for wf in PUBLIC_WORKFLOWS:
-            self.assertIsNone(pattern.search(read(wf)), f"{os.path.basename(wf)} can publish a release")
+            if os.path.basename(wf) == self.PROBE:
+                continue
+            self.assertIsNone(self.RELEASE.search(read(wf)), f"{os.path.basename(wf)} can publish a release")
+
+    def test_probe_release_has_no_game_inputs(self):
+        text = read(os.path.join(ROOT, ".github", "workflows", self.PROBE))
+        for forbidden in ("tools/build.sh", "SVZ_APK_URL", "original", "obb", "godot/data", "export_assets", "prepare_sources", "${{ secrets"):
+            self.assertNotIn(forbidden, text, forbidden)
+        self.assertEqual(text.count("gh release create"), 1)
+        start = text.index("gh release create probe-latest")
+        command = text[start:].split("\n\n")[0].rstrip()
+        self.assertTrue(command.endswith("probe/svz-probe.apk probe/verify.json"), command)
+        self.assertIn("working-directory: tools/probe", text)
 
     def test_no_write_permission_to_contents(self):
         for wf in PUBLIC_WORKFLOWS:
-            self.assertNotRegex(read(wf), r"contents:\s*write", os.path.basename(wf))
+            text = read(wf)
+            if os.path.basename(wf) == self.PROBE:  # write only in the probe's publish job
+                self.assertEqual(len(re.findall(r"contents:\s*write", text)), 1)
+                self.assertRegex(text, r"publish:\n(?:.*\n){0,8}\s+permissions:\n\s+contents: write")
+                continue
+            self.assertNotRegex(text, r"contents:\s*write", os.path.basename(wf))
 
     def test_builds_only_in_private_repositories(self):
         """Any workflow that touches the original game must stop first when the repository is public."""

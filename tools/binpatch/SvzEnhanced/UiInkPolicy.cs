@@ -32,7 +32,8 @@ namespace Svz
             return 0;
         }
 
-        public static int NextMode(int current) => current == Native ? Solid : current == Solid ? Original : current == Original ? Outlined : Native;
+        // The app intentionally exposes only a single two-state A/B comparison.
+        public static int NextMode(int current) => current == Native ? Original : Native;
         public static string ModeName(int mode) => mode == Native ? "readable" : mode == Solid ? "solid" : mode == Outlined ? "outlined" : "original";
     }
 }

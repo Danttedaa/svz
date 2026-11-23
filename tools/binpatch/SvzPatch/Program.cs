@@ -78,7 +78,8 @@ internal static class Program
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
 		var perf = enhanced.GetType("Svz.PerfTrace") ?? throw new PatchException("Svz.PerfTrace missing");
-		foreach (var name in new[] { "BeginRender", "EndRender", "BeginGui", "EndGui", "EndRenderer" })
+		foreach (var name in new[] { "BeginRender", "EndRender", "BeginGui", "EndGui", "EndRenderer",
+			"BeginAnimation", "EndAnimation", "BeginParticleSim", "EndParticleSim" })
 			Expect(perf, name, $"::{name}()");
 		Expect(perf, "BeginRenderer", "::BeginRenderer(System.Object)");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
@@ -659,18 +660,22 @@ internal static class Program
 		body.SimplifyMacros();
 		var il = body.GetILProcessor();
 
-		void Bracket(string type, string method, string begin, string end)
+		void Bracket(string type, string method, string begin, string end, int parameterCount = 0)
 		{
 			var hits = body.Instructions.Where(i => Calls(i, type, method)).ToList();
 			Require(hits.Count == 1, $"Main._Process calls {type}.{method} exactly once");
 			var target = hits[0];
 			Require(target.OpCode == OpCodes.Call && target.Operand is MethodReference m &&
-				!m.HasThis && m.Parameters.Count == 0 && m.ReturnType.FullName == "System.Void",
-				$"{type}.{method} must be static void with no arguments");
+				!m.HasThis && m.Parameters.Count == parameterCount && m.ReturnType.FullName == "System.Void" &&
+				(parameterCount == 0 || (parameterCount == 1 && m.Parameters[0].ParameterType.FullName == "System.Single")),
+				$"{type}.{method} must be static void with {parameterCount} matching argument(s)");
 			MethodReference Hook(string hook) => new MethodReference(hook, module.TypeSystem.Void, perf) { HasThis = false };
+			// If dt is already on the IL stack, a zero-argument hook leaves it intact.
 			il.InsertBefore(target, il.Create(OpCodes.Call, Hook(begin)));
 			il.InsertAfter(target, il.Create(OpCodes.Call, Hook(end)));
 		}
+		Bracket("Svz.AnimationSystem", "Update", "BeginAnimation", "EndAnimation", 1);
+		Bracket("Svz.Particles", "Update", "BeginParticleSim", "EndParticleSim", 1);
 		Bracket("Svz.Render", "Sync", "BeginRender", "EndRender");
 		Bracket("Svz.GuiSystem", "Frame", "BeginGui", "EndGui");
 		body.OptimizeMacros();
@@ -826,7 +831,11 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
-			("crowd render and GUI phases are profiled", CallsEnh("Svz.Main", "_Process", 1, "BeginRender") &&
+			("animation, particle simulation, render and GUI phases are profiled", CallsEnh("Svz.Main", "_Process", 1, "BeginAnimation") &&
+				CallsEnh("Svz.Main", "_Process", 1, "EndAnimation") &&
+				CallsEnh("Svz.Main", "_Process", 1, "BeginParticleSim") &&
+				CallsEnh("Svz.Main", "_Process", 1, "EndParticleSim") &&
+				CallsEnh("Svz.Main", "_Process", 1, "BeginRender") &&
 				CallsEnh("Svz.Main", "_Process", 1, "EndRender") &&
 				CallsEnh("Svz.Main", "_Process", 1, "BeginGui") &&
 				CallsEnh("Svz.Main", "_Process", 1, "EndGui")),

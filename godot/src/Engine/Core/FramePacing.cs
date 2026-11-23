@@ -142,9 +142,8 @@ namespace Svz
 
 		// ---------------------------------------------------------------- Android
 
-		/// Surface.setFrameRate(hz, FRAME_RATE_COMPATIBILITY_DEFAULT, strategy) on Godot's render surface.
-		/// Runs on the UI thread. Path 1: Godot.getRenderView().getView(); path 2: search the window's
-		/// view tree for a SurfaceView. Failures are logged, never fatal.
+		/// Surface.setFrameRate(hz, FRAME_RATE_COMPATIBILITY_DEFAULT, strategy) on Godot's render surface,
+		/// on the UI thread. Failures are logged, never fatal.
 		private static void RequestAndroidFrameRate(float hz, bool allowNonSeamless)
 		{
 			try
@@ -154,20 +153,7 @@ namespace Svz
 				var activity = rt.Call("getActivity").AsGodotObject();
 				if (activity == null) { Log("no activity; cannot request refresh rate"); return; }
 				int api = AndroidApiLevel();
-				if (api < 30) { Log($"Android API {api} < 30: Surface.setFrameRate unavailable"); return; }
-				var runnable = rt.Call("createRunnableFromGodotCallable", Callable.From(() =>
-				{
-					try
-					{
-						var view = RenderViewFromGodot(activity) ?? FindSurfaceView(activity.Call("getWindow").AsGodotObject()?.Call("getDecorView").AsGodotObject(), 0);
-						var surface = view?.Call("getHolder").AsGodotObject()?.Call("getSurface").AsGodotObject();
-						if (surface == null) { Log("render surface not found; refresh-rate request skipped"); return; }
-						if (api >= 31) surface.Call("setFrameRate", hz, 0, allowNonSeamless ? 1 : 0);
-						else surface.Call("setFrameRate", hz, 0);
-						Log($"Surface.setFrameRate({hz:0.#}) sent (API {api}, {(allowNonSeamless ? "always" : "seamless only")})");
-					}
-					catch (Exception e) { Log("setFrameRate failed: " + e.Message); }
-				}));
+				var runnable = rt.Call("createRunnableFromGodotCallable", Callable.From(() => Log(SendFrameRate(activity, api, hz, allowNonSeamless))));
 				activity.Call("runOnUiThread", runnable);
 			}
 			catch (Exception e)
@@ -176,22 +162,58 @@ namespace Svz
 			}
 		}
 
-		private static GodotObject RenderViewFromGodot(GodotObject activity)
+		// Android constants (android.view.Surface): FRAME_RATE_COMPATIBILITY_DEFAULT = 0,
+		// CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS = 0, CHANGE_FRAME_RATE_ALWAYS = 1.
+		public const int FrameRateCompatibilityDefault = 0, ChangeOnlyIfSeamless = 0, ChangeAlways = 1;
+
+		/// The Java call chain, separated from threading so it can be tested with stand-in objects.
+		/// Path 1: activity.getGodot().getRenderView().getView() (Godot 4.7.2: GodotActivity / Godot /
+		/// GodotRenderView, all public and un-minified in the official template).
+		/// Path 2: search activity.getWindow().getDecorView() for a view with getHolder() (a SurfaceView).
+		/// Then view.getHolder().getSurface().setFrameRate(...): (float, int, int) on API 31+, (float, int) on API 30.
+		/// Every hop is checked with JavaObject.has_java_method, so a log line names the step that failed.
+		/// Returns a one-line status for the log.
+		public static string SendFrameRate(GodotObject activity, int api, float hz, bool allowNonSeamless)
 		{
-			try
+			if (api < 30) return $"Android API {api} < 30: Surface.setFrameRate unavailable";
+			var missing = new List<string>();
+			var view = Hop(Hop(Hop(activity, "getGodot", missing), "getRenderView", missing), "getView", missing);
+			string path = "Godot.getRenderView";
+			if (view == null)
 			{
-				var godot = activity.Call("getGodot").AsGodotObject();
-				return godot?.Call("getRenderView").AsGodotObject()?.Call("getView").AsGodotObject();
+				view = FindSurfaceView(Hop(Hop(activity, "getWindow", missing), "getDecorView", missing), 0);
+				path = "view-tree search";
 			}
-			catch { return null; }
+			if (view == null) return "render view not found (" + string.Join(", ", missing) + "); refresh-rate request skipped";
+			var surface = Hop(Hop(view, "getHolder", missing), "getSurface", missing);
+			if (surface == null || !HasJavaMethod(surface, "setFrameRate")) return "Surface.setFrameRate not reachable (" + string.Join(", ", missing) + ")";
+			int strategy = allowNonSeamless ? ChangeAlways : ChangeOnlyIfSeamless;
+			if (api >= 31) surface.Call("setFrameRate", hz, FrameRateCompatibilityDefault, strategy);
+			else surface.Call("setFrameRate", hz, FrameRateCompatibilityDefault);
+			return string.Format(CultureInfo.InvariantCulture, "Surface.setFrameRate({0:0.#}) sent via {1} (API {2}, {3})",
+				hz, path, api, api >= 31 ? (allowNonSeamless ? "always" : "seamless only") : "2-arg");
+		}
+
+		private static bool HasJavaMethod(GodotObject obj, string method)
+		{
+			try { return obj != null && obj.HasMethod("has_java_method") && obj.Call("has_java_method", method).AsBool(); }
+			catch { return false; }
+		}
+
+		private static GodotObject Hop(GodotObject obj, string method, List<string> missing, params Variant[] args)
+		{
+			if (obj == null) return null;
+			if (!HasJavaMethod(obj, method)) { missing.Add("no " + method + "()"); return null; }
+			var next = obj.Call(method, args).AsGodotObject();
+			if (next == null) missing.Add(method + "() returned null");
+			return next;
 		}
 
 		private static GodotObject FindSurfaceView(GodotObject view, int depth)
 		{
 			if (view == null || depth > 8) return null;
-			string desc = view.Call("toString").AsString();
-			if (desc.Contains("SurfaceView") || desc.Contains("RenderView")) return view;
-			if (!desc.Contains("Layout") && !desc.Contains("DecorView") && !desc.Contains("ViewGroup")) return null;
+			if (HasJavaMethod(view, "getHolder")) return view;   // SurfaceView (Godot's GL/Vulkan render view)
+			if (!HasJavaMethod(view, "getChildCount") || !HasJavaMethod(view, "getChildAt")) return null;
 			int n = view.Call("getChildCount").AsInt32();
 			for (int i = 0; i < n; i++)
 			{

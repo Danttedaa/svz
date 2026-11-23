@@ -52,6 +52,7 @@ public partial class Test : Node
 			case "restart-1": Restart1(); break;
 			case "restart-2": Restart2(); break;
 			case "restart-3": Restart3(); break;
+			case "bridge": Bridge(); break;
 			default: Check(false, "unknown phase " + Phase()); break;
 		}
 		Finish();
@@ -90,6 +91,53 @@ public partial class Test : Node
 		Check(Engine.MaxFps == 120 || (FramePacing.Decision.VsyncPaced && Engine.MaxFps == 0), $"restart-3: engine follows reloaded target (MaxFps={Engine.MaxFps})");
 		Check(FramePacing.Settings.ShowFps, "restart-3: readout setting still on");
 		Check(Cfg("auto_fallback").AsBool() && Cfg("fallback_fps").AsInt32() == 60, "restart-3: other settings intact");
+	}
+
+	// Android refresh-rate bridge: FramePacing.SendFrameRate against stand-in Java objects.
+	private void Bridge()
+	{
+		var a = FakeActivity.Standard(out var sv);
+		string st = FramePacing.SendFrameRate(a, 37, 120f, false);
+		GD.Print("[test] " + st);
+		var c = sv.Holder.Surface.Calls;
+		Check(c.Count == 1 && c[0] == (120f, 0, 0), "API 37: setFrameRate(120, DEFAULT, ONLY_IF_SEAMLESS) via Godot.getRenderView");
+		Check(st.Contains("via Godot.getRenderView"), "status names path 1");
+
+		a = FakeActivity.Standard(out sv);
+		FramePacing.SendFrameRate(a, 37, 60f, true);
+		Check(sv.Holder.Surface.Calls.Count == 1 && sv.Holder.Surface.Calls[0] == (60f, 0, 1), "allow_non_seamless_switch -> CHANGE_FRAME_RATE_ALWAYS (1)");
+
+		a = FakeActivity.Standard(out sv);
+		sv.Holder.SurfaceApi30 = new FakeSurfaceApi30();
+		FramePacing.SendFrameRate(a, 30, 120f, false);
+		Check(sv.Holder.SurfaceApi30.Calls.Count == 1 && sv.Holder.SurfaceApi30.Calls[0] == (120f, 0), "API 30: 2-argument overload");
+
+		a = FakeActivity.Standard(out sv);
+		a.Hidden.Add("getGodot");
+		st = FramePacing.SendFrameRate(a, 37, 120f, false);
+		GD.Print("[test] " + st);
+		Check(sv.Holder.Surface.Calls.Count == 1 && st.Contains("view-tree search"), "falls back to the view-tree search when getGodot() is missing");
+
+		a = FakeActivity.Standard(out sv);
+		a.Godot.RenderView.View = null;   // render view not attached yet
+		st = FramePacing.SendFrameRate(a, 37, 120f, false);
+		Check(sv.Holder.Surface.Calls.Count == 1 && st.Contains("view-tree search"), "falls back when getView() returns null");
+
+		a = FakeActivity.Standard(out sv);
+		a.Hidden.Add("getGodot");
+		a.Hidden.Add("getWindow");
+		st = FramePacing.SendFrameRate(a, 37, 120f, false);
+		GD.Print("[test] " + st);
+		Check(sv.Holder.Surface.Calls.Count == 0 && st.Contains("no getGodot()") && st.Contains("no getWindow()"), "nothing reachable: no call, log names the missing hops");
+
+		a = FakeActivity.Standard(out sv);
+		sv.Holder.Surface.Hidden.Add("setFrameRate");
+		st = FramePacing.SendFrameRate(a, 37, 120f, false);
+		Check(sv.Holder.Surface.Calls.Count == 0 && st.Contains("not reachable"), "missing setFrameRate is reported, not called");
+
+		a = FakeActivity.Standard(out sv);
+		st = FramePacing.SendFrameRate(a, 29, 120f, false);
+		Check(sv.Holder.Surface.Calls.Count == 0 && st.Contains("< 30"), "API 29: no call");
 	}
 
 	private void MainChecks()

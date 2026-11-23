@@ -34,6 +34,9 @@ dotnet build "$rt/FramePacingRuntimeTest.csproj" -nologo -v quiet
 "$godot_bin" --headless --path "$rt" --import >/dev/null 2>&1 || true
 "$godot_bin" --headless --path "$rt"
 
+echo "== Android refresh-rate bridge against stand-in Java objects"
+"$godot_bin" --headless --path "$rt" -- --phase=bridge
+
 echo "== settings survive an app restart (three separate processes)"
 for phase in restart-1 restart-2 restart-3; do
   "$godot_bin" --headless --path "$rt" -- --phase=$phase

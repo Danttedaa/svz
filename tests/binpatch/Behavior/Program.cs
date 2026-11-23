@@ -64,6 +64,53 @@ static class Program
 		Check((int)resultsType.GetProperty("RatingPrompts").GetValue(results) == 0,
 			"obsolete market rating prompt stays hidden");
 
+		// 4. Shipped-style particle mesh builder reuses same-sized buffers but
+		// reallocates safely when particle counts change. Inspect actual patched
+		// method behavior, not only its three Cecil call-site signatures.
+		var rendererT = port.GetType("UnityEngine.ParticleRenderer");
+		var meshT = port.GetType("UnityEngine.Mesh");
+		var particlesT = port.GetType("Svz.Particles");
+		var build = particlesT.GetMethod("BuildMesh", F);
+		var countProp = rendererT.GetProperty("ParticleCount");
+		object NewRenderer(int count)
+		{
+			var obj = Activator.CreateInstance(rendererT, true);
+			countProp.SetValue(obj, count);
+			return obj;
+		}
+		var renderer = NewRenderer(3);
+		object Build(object r) => build.Invoke(null, new object[] { r, null });
+		var mesh = Build(renderer);
+		Array Field(string name) => (Array)meshT.GetField(name, F).GetValue(mesh);
+		var verts = Field("__v");
+		var uvs = Field("__uv");
+		var colors = Field("__c");
+		int[] Indices() => ((System.Collections.Generic.List<int[]>)meshT.GetField("__subs", F).GetValue(mesh))[0];
+		var indices = Indices();
+		Check(indices.Length == 18, "particle triangle mesh has six indices per particle");
+		Check(verts.Length == 12 && uvs.Length == 12 && colors.Length == 12,
+			"particle mesh generates all four corners for each particle");
+		Check(ReferenceEquals(mesh, Build(renderer)) &&
+			ReferenceEquals(verts, Field("__v")) &&
+			ReferenceEquals(uvs, Field("__uv")) &&
+			ReferenceEquals(colors, Field("__c")) && ReferenceEquals(indices, Indices()),
+			"same-sized frames reuse all four previous renderer-owned arrays");
+		countProp.SetValue(renderer, 5);
+		Build(renderer);
+		Check(Field("__v").Length == 20 && Indices().Length == 30 &&
+			!ReferenceEquals(verts, Field("__v")) && !ReferenceEquals(indices, Indices()),
+			"particle count growth resizes vertex and triangle-index arrays safely");
+		countProp.SetValue(renderer, 0);
+		Build(renderer);
+		Check(Field("__v").Length == 0 && Field("__uv").Length == 0 &&
+			Field("__c").Length == 0 && Indices().Length == 0,
+			"particle death clears previous mesh vertices, colors, and triangle indices");
+		var secondRenderer = NewRenderer(3);
+		var secondMesh = Build(secondRenderer);
+		Check(!ReferenceEquals(mesh, secondMesh) &&
+			!ReferenceEquals(verts, meshT.GetField("__v", F).GetValue(secondMesh)),
+			"different particle renderers never share mutable buffers");
+
 		Console.WriteLine($"[test] {passed} patched-behaviour checks passed");
 		return 0;
 	}

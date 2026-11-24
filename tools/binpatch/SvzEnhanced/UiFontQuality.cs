@@ -44,7 +44,10 @@ namespace Svz
 				int diff = Math.Abs(screenHeight - candidate);
 				if (diff < distance) { distance = diff; closest = candidate; }
 			}
-			int chosen = screenHeight >= 700 && screenHeight <= 1536 && supported.Contains(1536) ? 1536 : closest;
+			// Diagnostic startup override: restore the port's native font selection
+			// without changing normal builds or saved player settings.
+			bool nativeBaseline = Environment.GetCommandLineArgs().Contains("--test-native-font-baseline");
+			int chosen = !nativeBaseline && screenHeight >= 700 && screenHeight <= 1536 && supported.Contains(1536) ? 1536 : closest;
 			NearestResolution = closest;
 			SelectedResolution = chosen;
 			return chosen.ToString(CultureInfo.InvariantCulture);

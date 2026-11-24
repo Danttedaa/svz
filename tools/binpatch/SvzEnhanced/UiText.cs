@@ -7,12 +7,13 @@ namespace Svz
 	/// <summary>
 	/// Readable bitmap-font text for the port (Store, Allies, dialogs, HUD), binary-patch route.
 	///
-	/// The original bitmap font is the default. The native font is an experimental
-	/// alternative only; a device comparison found it thinner and less legible.
+	/// Original SvZ bitmap glyphs remain the default and retain the game's character.
+	/// An optional HD sampling mode prefilters those SAME glyph pixels at half
+	/// resolution, addressing 1536->768 atlas minification without replacing the
+	/// font or changing positioning, layout, effects, colors, or glyph shapes.
 	/// There is exactly ONE gesture: hold two fingers for two seconds to switch
-	/// between readable and original text. No font-size, FPS or overlay holds.
-	/// Original decorated headings, character art, and game data remain untouched.
-	/// Settings: user://svz_ui.cfg, section [text], font_mode_v4.
+	/// between original and original-HD for A/B screenshots.
+	/// Settings: user://svz_ui.cfg, section [text], font_mode_v5.
 	/// </summary>
 	public static class UiText
 	{
@@ -27,6 +28,9 @@ namespace Svz
 
 		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance, Chroma; }
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
+		private sealed class PrefilterAtlas { public Texture2D Texture; }
+		private static readonly ConditionalWeakTable<Texture2D, PrefilterAtlas> sPrefilter = new();
+		private static bool sLoggedSmoothedGlyph, sLoggedSamplingGate;
 
 		/// Narrow one-pixel outline at 1080p; avoid obscuring the thin legacy glyph interiors.
 		public static float HaloOffset(float screenHeight) => Math.Max(0.8f, screenHeight / 1080f);
@@ -50,6 +54,42 @@ namespace Svz
 		{
 			if (!sHaloPass)
 			{
+				// Source is the ORIGINAL font atlas. This optional A/B mode
+				// creates a Lanczos downsample ONCE per source texture to avoid
+				// aliasing when 1536px font glyphs are displayed at half size.
+				// The source rect maps to half-resolution texture coordinates,
+				// while destination geometry and original RGBA stay unchanged.
+				if (FontMode == UiInkPolicy.SmoothedOriginal)
+				{
+					if (sViewportHeight <= 0f) sViewportHeight = ViewHeight(self);
+					int nearest = UiFontQuality.NearestResolution, selected = UiFontQuality.SelectedResolution;
+					float glyphHeight = Math.Abs(rect.Size.Y);
+					int atlasWidth = texture.GetWidth(), atlasHeight = texture.GetHeight();
+					if (!sLoggedSamplingGate)
+					{
+						sLoggedSamplingGate = true;
+						GD.Print($"[svz-ui] font prefilter diagnostics: nearest={nearest} selected={selected} glyph={glyphHeight:0.0} viewport={sViewportHeight:0.0} atlas={atlasWidth}x{atlasHeight}");
+					}
+					if (UiGlyphSampling.UseHalfAtlas(nearest, selected, glyphHeight,
+						sViewportHeight, atlasWidth, atlasHeight))
+					{
+						var filtered = sPrefilter.GetValue(texture, MakePrefilterAtlas);
+						if (filtered.Texture != null)
+						{
+							var fs = new Vector2(
+								(float)filtered.Texture.GetWidth() / texture.GetWidth(),
+								(float)filtered.Texture.GetHeight() / texture.GetHeight());
+							var mapped = new Rect2(srcRect.Position * fs, srcRect.Size * fs);
+							self.DrawTextureRectRegion(filtered.Texture, rect, mapped, modulate, transpose, clipUv);
+							if (!sLoggedSmoothedGlyph)
+							{
+								sLoggedSmoothedGlyph = true;
+								GD.Print("[svz-ui] prefiltered original font glyph rendered");
+							}
+							return;
+						}
+					}
+				}
 				// Keep the original silhouette but remove noisy baked RGB details from
 				// small monochrome glyphs. Do not affect large art headings or colored text.
 				if (FontMode == UiInkPolicy.Solid)
@@ -92,6 +132,39 @@ namespace Svz
 				var r = new Rect2(rect.Position + new Vector2(dx, dy), rect.Size);
 				self.DrawTextureRectRegion(atlas.Texture, r, srcRect, halo, transpose, clipUv);
 			}
+		}
+
+		/// One-time Lanczos antialiasing for the original high-resolution font.
+		/// This never modifies source textures or changes any UI size, positions,
+		/// color or glyph assets. If the atlas cannot be read, use it unchanged.
+		private static PrefilterAtlas MakePrefilterAtlas(Texture2D source)
+		{
+			var result = new PrefilterAtlas();
+			try
+			{
+				var img = source.GetImage();
+				if (img == null || img.IsEmpty())
+				{
+					GD.Print("[svz-ui] original-font prefilter unavailable: source image empty");
+					return result;
+				}
+				if (img.IsCompressed() && img.Decompress() != Error.Ok)
+				{
+					GD.Print("[svz-ui] original-font prefilter unavailable: source decompress failed");
+					return result;
+				}
+				img.Convert(Image.Format.Rgba8);
+				int width = UiGlyphSampling.HalfSize(img.GetWidth());
+				int height = UiGlyphSampling.HalfSize(img.GetHeight());
+				img.Resize(width, height, Image.Interpolation.Lanczos);
+				result.Texture = ImageTexture.CreateFromImage(img);
+				GD.Print($"[svz-ui] original-font atlas prefiltered: {source.GetWidth()}x{source.GetHeight()} -> {width}x{height}");
+			}
+			catch (Exception e)
+			{
+				GD.Print("[svz-ui] original-font prefilter unavailable: " + e.Message);
+			}
+			return result;
 		}
 
 		/// White copy of a font atlas that keeps only its alpha (LA8: half the memory of RGBA), plus the
@@ -156,16 +229,21 @@ namespace Svz
 			{
 				var cf = new ConfigFile();
 				bool exists = cf.Load(ConfigPath) == Error.Ok;
-				// v1026 made the native font the default, but the phone A/B screenshots
-				// show that it is too thin and small. Migrate once to original via v4;
-				// subsequent user choices made with the sole text gesture persist.
-				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v4")
-					? cf.GetValue("text", "font_mode_v4").AsInt32() : UiInkPolicy.Original;
-				FontMode = requestedMode == UiInkPolicy.Native ? UiInkPolicy.Native : UiInkPolicy.Original;
+				// The previous native-font experiment was less legible than the
+				// original on S25 Ultra. Upgrade once to the original, then save
+				// a choice between original and original-HD in font_mode_v5.
+				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v5")
+					? cf.GetValue("text", "font_mode_v5").AsInt32() : UiInkPolicy.Original;
+				FontMode = requestedMode == UiInkPolicy.SmoothedOriginal
+					? UiInkPolicy.SmoothedOriginal : UiInkPolicy.Original;
 				Contrast = false;
 				UiFontQuality.TextScale = 1f;
-				if (!exists || !cf.HasSectionKey("text", "font_mode_v4") ||
+				if (!exists || !cf.HasSectionKey("text", "font_mode_v5") ||
 					!cf.HasSectionKey("text", "scale") || cf.GetValue("text", "scale").AsInt32() != 100) Save();
+				// Private emulator smoke can exercise original-HD without saving
+				// the test mode into the player's own settings.
+				if (Array.IndexOf(OS.GetCmdlineUserArgs(), "--test-original-hd") >= 0)
+					FontMode = UiInkPolicy.SmoothedOriginal;
 				FramePacing.AfterFrame += OnFrame;
 				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, mode {UiInkPolicy.ModeName(FontMode)}, contrast {(Contrast ? "on" : "off")}");
 			}
@@ -184,14 +262,15 @@ namespace Svz
 			cf.SetValue("text", "font_mode_v1", FontMode == UiInkPolicy.Native ? UiInkPolicy.Solid : FontMode);
 			cf.SetValue("text", "font_mode_v2", FontMode);
 			cf.SetValue("text", "font_mode_v3", FontMode);
-			cf.SetValue("text", "font_mode_v4", FontMode);
+			cf.SetValue("text", "font_mode_v4", FontMode == UiInkPolicy.SmoothedOriginal ? UiInkPolicy.Original : FontMode);
+			cf.SetValue("text", "font_mode_v5", FontMode);
 			cf.Save(ConfigPath);
 		}
 
 		private static void OnFrame(double delta, int touchCount)
 		{
 			if (!sTextToggle.Update(touchCount, delta)) return;
-			FontMode = FontMode == UiInkPolicy.Native ? UiInkPolicy.Original : UiInkPolicy.Native;
+			FontMode = UiInkPolicy.NextMode(FontMode);
 			Contrast = false;
 			Save();
 			FramePacing.Notify($"Text: {UiInkPolicy.ModeName(FontMode)}");

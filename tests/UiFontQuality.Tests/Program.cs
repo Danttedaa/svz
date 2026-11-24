@@ -110,11 +110,26 @@ internal static class Test
 			"transparent text remains invisible");
 		Ok(UiInkPolicy.InkKind(float.NaN, 708, 0.18f, 0.02f, 1, 1, 1, 1) == 0,
 			"invalid dimensions always preserve original");
-		Ok(UiInkPolicy.NextMode(UiInkPolicy.Native) == UiInkPolicy.Original &&
-			UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.Native &&
-			UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Native &&
-			UiInkPolicy.NextMode(UiInkPolicy.Outlined) == UiInkPolicy.Native,
-			"one hold toggles only readable and original font (legacy styles normalize)");
+		Ok(UiInkPolicy.NextMode(UiInkPolicy.Original) == UiInkPolicy.SmoothedOriginal &&
+			UiInkPolicy.NextMode(UiInkPolicy.SmoothedOriginal) == UiInkPolicy.Original &&
+			UiInkPolicy.NextMode(UiInkPolicy.Native) == UiInkPolicy.Original &&
+			UiInkPolicy.NextMode(UiInkPolicy.Solid) == UiInkPolicy.Original,
+			"one hold toggles only original and prefiltered original atlas");
+
+		Ok(UiGlyphSampling.UseHalfAtlas(768, 1536, 22, 708, 2048, 1024),
+			"half-size original HD atlas may be prefiltered for small UI text");
+		Ok(!UiGlyphSampling.UseHalfAtlas(1536, 1536, 22, 1440, 2048, 1024),
+			"do not shrink font glyphs already at native resolution");
+		Ok(!UiGlyphSampling.UseHalfAtlas(768, 1536, 80, 708, 2048, 1024),
+			"preserve large original painted headings");
+		Ok(!UiGlyphSampling.UseHalfAtlas(768, 1536, float.NaN, 708, 2048, 1024),
+			"invalid text geometry uses unaltered atlas");
+		Ok(!UiGlyphSampling.UseHalfAtlas(768, 1536, 22, 708, 8192, 8192),
+			"avoid oversized runtime font texture copies");
+		Ok(UiGlyphSampling.HalfSize(2048) == 1024 &&
+			Math.Abs(UiGlyphSampling.MapCoordinate(512, 2048, 1024) - 256) < 0.001f &&
+			Math.Abs(UiGlyphSampling.MapCoordinate(32, 1024, 512) - 16) < 0.001f,
+			"downsampled UV coordinate and size mapping preserves text geometry");
 
 		Ok(UiReadablePolicy.Eligible("LEVEL UP HERO", 30, 709, 1, 1, 1, 1),
 			"small monochrome labels are eligible for readable font");

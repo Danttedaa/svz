@@ -9,7 +9,7 @@ namespace Svz
     /// </summary>
     public static class UiInkPolicy
     {
-        public const int Solid = 0, Original = 1, Outlined = 2, Native = 3;
+        public const int Solid = 0, Original = 1, Outlined = 2, Native = 3, SmoothedOriginal = 4;
 
         /// <returns>+1 dark solid glyph, -1 light solid glyph, 0 preserve the original RGB texture.</returns>
         public static int InkKind(float glyphHeight, float viewportHeight,
@@ -33,7 +33,7 @@ namespace Svz
         }
 
         // The app intentionally exposes only a single two-state A/B comparison.
-        public static int NextMode(int current) => current == Native ? Original : Native;
-        public static string ModeName(int mode) => mode == Native ? "readable" : mode == Solid ? "solid" : mode == Outlined ? "outlined" : "original";
+        public static int NextMode(int current) => current == Original ? SmoothedOriginal : Original;
+        public static string ModeName(int mode) => mode == SmoothedOriginal ? "original HD" : mode == Native ? "readable" : mode == Solid ? "solid" : mode == Outlined ? "outlined" : "original";
     }
 }

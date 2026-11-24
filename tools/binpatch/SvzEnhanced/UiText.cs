@@ -157,8 +157,16 @@ namespace Svz
 				int width = UiGlyphSampling.HalfSize(img.GetWidth());
 				int height = UiGlyphSampling.HalfSize(img.GetHeight());
 				img.Resize(width, height, Image.Interpolation.Lanczos);
+				// The hand-painted font contains narrow transparent scratches.
+				// On 720p screens some scratches become isolated holes after
+				// minification. Repair only pixels surrounded by existing ink;
+				// preserve letter counters, outer silhouettes, palette and UVs.
+				var pixels = img.GetData();
+				int repaired = UiGlyphAlphaRepair.Repair(pixels, width, height);
+				if (repaired > 0)
+					img = Image.CreateFromData(width, height, false, Image.Format.Rgba8, pixels);
 				result.Texture = ImageTexture.CreateFromImage(img);
-				GD.Print($"[svz-ui] original-font atlas prefiltered: {source.GetWidth()}x{source.GetHeight()} -> {width}x{height}");
+				GD.Print($"[svz-ui] original-font atlas prefiltered: {source.GetWidth()}x{source.GetHeight()} -> {width}x{height}, pinholes={repaired}");
 			}
 			catch (Exception e)
 			{

@@ -9,8 +9,9 @@
 # Stages:
 #   1. normal start (intro): app runs, SvzEnhanced.dll loaded, game data loaded
 #   2. Store opened directly (--level=3): the text patches run (fonts, contrast halo)
-#   3. battle opened directly (--level=2 --killall=25): skinning, animation blending, death and corpse code
-# Stages 2-3 need the game's debug command line (--level=N). Godot ignores command-line extras sent to its
+#   3. Store original-HD prefilter (--level=3 --test-original-hd): actual HD glyph draw is required
+#   4. battle opened directly (--level=2 --killall=25): skinning, animation blending, death and corpse code
+# Stages 2-4 need the game's debug command line (--level=N). Godot ignores command-line extras sent to its
 # exported launcher activity, so these stages install emulator-only VARIANTS of the APK whose packaged
 # command line (assets/_cl_) has the arguments appended, signed with a throwaway key (smoke_variant.py).
 # The published APK is not changed. If a variant cannot be built, the stage is WARN (not exercised).
@@ -106,7 +107,18 @@ else
         fail+=("store: experimental native font drew without user selecting it")
       fi
     fi
-    # stage 3: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
+    # stage 3: deliberately test the OPTIONAL prefiltered ORIGINAL glyphs.
+    # This flag is restricted to an emulator-only command-line test variant.
+    if launch_level store-hd 3 45 --level=3 --test-original-hd; then
+      grep -q "\[svz-ui\] text scale .*mode original HD, contrast off" "$out/logcat-store-hd.txt" \
+        || fail+=("store-hd: prefiltered-original A/B mode did not initialize")
+      if grep -q "\[svz-ui\] prefiltered original font glyph rendered" "$out/logcat-store-hd.txt"; then
+        note "store-hd: same original glyphs rendered from antialiased atlas"
+      else
+        fail+=("store-hd: no original-font prefiltered glyph was actually drawn")
+      fi
+    fi
+    # stage 4: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then
       grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"

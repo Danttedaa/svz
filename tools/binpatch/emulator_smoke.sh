@@ -127,6 +127,13 @@ else
       else
         fail+=("store-hd: no original-font prefiltered glyph was actually drawn")
       fi
+      # A build claiming repaired glyphs must prove at least one damaged pixel
+      # was changed in the actual original atlas (not merely in synthetic tests).
+      if grep -Eq "\[svz-ui\] original-font atlas prefiltered: .*pinholes=[1-9][0-9]*" "$out/logcat-store-hd.txt"; then
+        note "store-hd: actual original glyph atlas has repaired pinholes"
+      else
+        fail+=("store-hd: no alpha pinholes repaired in the real game font")
+      fi
       grep -o '\[svz-ui\] font prefilter diagnostics:.*\|\[svz-ui\] original-font prefilter unavailable:.*\|\[svz-ui\] original-font atlas prefiltered:.*' \
         "$out/logcat-store-hd.txt" | head -8 | sed 's/^/store-hd: /' >> "$out/details.txt" || true
     fi

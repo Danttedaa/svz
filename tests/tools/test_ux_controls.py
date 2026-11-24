@@ -26,8 +26,10 @@ class SingleGestureTests(unittest.TestCase):
         self.assertNotIn("sCycle.Update(", source)
         self.assertNotIn("NextScaleStep(", source)
         self.assertIn("FontMode == UiInkPolicy.Native ? UiInkPolicy.Original : UiInkPolicy.Native", source)
-        self.assertIn('cf.SetValue("text", "font_mode_v3", FontMode)', source)
+        self.assertIn('cf.SetValue("text", "font_mode_v4", FontMode)', source)
         self.assertIn('UiFontQuality.TextScale = 1f;', source)
+        self.assertIn('public static int FontMode = UiInkPolicy.Original;', source)
+        self.assertIn('cf.GetValue("text", "font_mode_v4").AsInt32() : UiInkPolicy.Original', source)
 
 if __name__ == "__main__":
     unittest.main()

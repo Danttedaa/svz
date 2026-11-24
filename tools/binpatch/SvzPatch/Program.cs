@@ -87,6 +87,13 @@ internal static class Program
 			x.Parameters[0].ParameterType.FullName == "System.Int32" &&
 			x.Parameters[1].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32[]>"),
 			"ParticleArrayReuse.ReuseIndices(int,List<int[]>) missing");
+		var readable = enhanced.GetType("Svz.UiReadableText") ?? throw new PatchException("UiReadableText missing");
+		Require(readable.Methods.Any(x => x.Name == "TryDraw" && x.IsPublic && x.IsStatic &&
+			x.ReturnType.FullName == "System.Boolean" && x.Parameters.Count == 3 &&
+			x.Parameters[0].ParameterType.FullName == "Godot.CanvasItem" &&
+			x.Parameters[1].ParameterType.FullName == "System.Object" &&
+			x.Parameters[2].ParameterType.FullName == "System.Single"),
+			"UiReadableText.TryDraw(CanvasItem,object,float) missing");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -248,6 +255,7 @@ internal static class Program
 		var uiTextRef = new TypeReference("Svz", "UiText", module, asmRef);
 		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
 		PatchTextHalo(module, uiTextRef);
+		PatchNativeSmallText(module, new TypeReference("Svz", "UiReadableText", module, asmRef));
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 		PatchParticleArrayReuse(module, new TypeReference("Svz", "ParticleArrayReuse", module, asmRef));
@@ -646,6 +654,64 @@ internal static class Program
 	}
 
 
+	// The normal GUIText traversal remains the fallback. The final (non-halo)
+	// DrawText call becomes "try clean font; if unavailable, original DrawText".
+	// This skips each individual bitmap glyph draw when native text succeeds,
+	// with no duplicate pass, no text rewriting and no changes to art textures.
+	private static void PatchNativeSmallText(ModuleDefinition module, TypeReference helper)
+	{
+		var canvas = GuiCanvas(module);
+		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
+		var glyph = drawText.Body.Instructions.FirstOrDefault(i => Calls(i, "Svz.UiText", "DrawGlyph"));
+		var glyphCall = glyph?.Operand as MethodReference;
+		Require(glyphCall != null && glyphCall.Parameters.Count == 7,
+			"DrawText is already patched to UiText.DrawGlyph");
+		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0).Body;
+		draw.SimplifyMacros();
+		var calls = draw.Instructions.Where(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference r && r.Name == "DrawText" &&
+			r.DeclaringType.FullName == canvas.FullName).ToList();
+		Require(calls.Count == 2, "halo and regular DrawText calls must both exist");
+		var normalCall = calls[1];
+		var p2 = normalCall.Previous;
+		var p1 = p2?.Previous;
+		var p0 = p1?.Previous;
+		Require(p0 != null && p0.OpCode == OpCodes.Ldarg && p0.Operand == draw.ThisParameter &&
+			p1 != null && (p1.OpCode == OpCodes.Ldloc || p1.OpCode == OpCodes.Ldarg) &&
+			p2 != null && (p2.OpCode == OpCodes.Ldloc || p2.OpCode == OpCodes.Ldarg),
+			"the normal draw call keeps this,GUIText,screen-height on the IL stack");
+		var original = (MethodReference)normalCall.Operand;
+		var native = new MethodReference("TryDraw", module.TypeSystem.Boolean, helper) { HasThis = false };
+		native.Parameters.Add(new ParameterDefinition(glyphCall.Parameters[0].ParameterType));
+		native.Parameters.Add(new ParameterDefinition(module.TypeSystem.Object));
+		native.Parameters.Add(new ParameterDefinition(module.TypeSystem.Single));
+		var il = draw.GetILProcessor();
+		var after = normalCall.Next;
+		if (after == null) { after = il.Create(OpCodes.Nop); il.Append(after); }
+		normalCall.Operand = native;
+		var insert = new[]
+		{
+			il.Create(OpCodes.Brtrue, after),
+			il.Create(OpCodes.Ldarg, draw.ThisParameter),
+			Clone(il, p1.OpCode, p1.Operand),
+			Clone(il, p2.OpCode, p2.Operand),
+			il.Create(OpCodes.Call, original),
+		};
+		var at = normalCall;
+		foreach (var ins in insert) { il.InsertAfter(at, ins); at = ins; }
+		draw.OptimizeMacros();
+		Require(NativeSmallTextPatched(module), "clean readable font fallback not installed");
+	}
+
+	private static bool NativeSmallTextPatched(ModuleDefinition module)
+	{
+		var draw = GuiCanvas(module).Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
+		return draw.Body.Instructions.Count(i => Calls(i, "Svz.UiReadableText", "TryDraw") &&
+			i.Operand is MethodReference m && m.DeclaringType.Scope.Name == Enh) == 1 &&
+			draw.Body.Instructions.Any(i => (i.OpCode == OpCodes.Brtrue || i.OpCode == OpCodes.Brtrue_S) &&
+				i.Previous != null && Calls(i.Previous, "Svz.UiReadableText", "TryDraw"));
+	}
+
 	// Avoid allocating three new arrays for *every* particle renderer on *every*
 	// frame when its particle count has not changed. This patch preserves the
 	// original BuildMesh loop, UV generation, color calculations and geometry.
@@ -866,6 +932,7 @@ internal static class Program
 			("event-only animation clips last until their last event", ClipLengthPatched(m)),
 			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
+			("small labels can bypass distressed bitmap font with a native fallback", NativeSmallTextPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
 			("all four particle mesh arrays reused on equal-size frames", ParticleArrayReusePatched(m)),

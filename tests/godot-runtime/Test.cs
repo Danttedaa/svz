@@ -3,7 +3,7 @@ using Godot;
 using Svz;
 
 /// Runs FramePacing inside the real Godot 4.7 runtime (desktop, headless) and checks what it does to
-/// the engine: Engine.MaxFps, the settings file, gestures, fallback and the real frame rate.
+/// the engine: Engine.MaxFps, persistent settings, fallback and the real frame rate.
 /// Android-only paths (Surface.setFrameRate) are not exercised here.
 public partial class Test : Node
 {
@@ -38,12 +38,6 @@ public partial class Test : Node
 		return "main";
 	}
 
-	private static void Hold(int fingers)
-	{
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, fingers);
-		FramePacing.Frame(1.0 / 60, 0);
-	}
-
 	public override void _Ready()
 	{
 		switch (Phase())
@@ -59,15 +53,19 @@ public partial class Test : Node
 	}
 
 	// Restart regression: each phase is a separate Godot process, so nothing survives in static state.
-	// 1: fresh install -> player picks 60 FPS and the FPS readout.
+	// 1: fresh install -> external configuration changes 60 FPS and the readout.
 	private void Restart1()
 	{
 		DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(FramePacing.ConfigPath));
 		FramePacing.Init(this, msg => mNotes.Add(msg));
 		Check(FramePacing.Settings.TargetFps == 120, "restart-1: fresh install defaults to 120");
-		Hold(4);
-		Hold(5);
-		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.Settings.ShowFps, "restart-1: 60 FPS + readout chosen");
+		FramePacing.SetTargetFps(60, "test API");
+		var cfg = new ConfigFile();
+		cfg.Load(FramePacing.ConfigPath);
+		cfg.SetValue("display", "show_fps", true);
+		cfg.Save(FramePacing.ConfigPath);
+		Check(FramePacing.Settings.TargetFps == 60 && Cfg("show_fps").AsBool(),
+			"restart-1: saved 60 FPS and readout through explicit settings");
 	}
 
 	// 2: after restart the choices are back; then back to 120, and a session fallback happens.
@@ -77,8 +75,8 @@ public partial class Test : Node
 		Check(FramePacing.Settings.TargetFps == 60, "restart-2: 60 FPS reloaded after restart");
 		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60, $"restart-2: engine capped at 60 after restart (MaxFps={Engine.MaxFps})");
 		Check(FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") != null, "restart-2: FPS readout reloaded and shown");
-		Hold(4);
-		Check(FramePacing.Settings.TargetFps == 120, "restart-2: switched back to 120");
+		FramePacing.SetTargetFps(120, "test API");
+		Check(FramePacing.Settings.TargetFps == 120, "restart-2: API restores 120");
 		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
 		Check(FramePacing.EffectiveFps == 60, "restart-2: session fallback active");
 	}
@@ -150,26 +148,28 @@ public partial class Test : Node
 		Check(FileAccess.FileExists(FramePacing.ConfigPath), "defaults written to settings file");
 		Check(Cfg("target_fps").AsInt32() == 120 && Cfg("auto_fallback").AsBool(), "settings file content");
 
-		// 4-finger hold for 1.5 s -> 60 FPS, saved
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 4);
-		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.EffectiveFps == 60, "4-finger hold switches to 60");
-		Check(Engine.MaxFps == 60, $"engine capped at 60 (MaxFps={Engine.MaxFps})");
-		Check(Cfg("target_fps").AsInt32() == 60, "60 saved");
-		Check(mNotes.Contains("Frame rate: 60 FPS"), "player notified of switch");
+		// Legacy 4- and 5-finger holds are intentionally disabled. Neither
+		// must accidentally alter FPS, persistence, or on-screen diagnostics.
+		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 120, 4);
+		FramePacing.Frame(1.0 / 120, 0);
+		Check(FramePacing.Settings.TargetFps == 120 && FramePacing.EffectiveFps == 120,
+			"4-finger hold cannot change the 120 FPS target");
+		Check(Engine.MaxFps == 120, "120 FPS ceiling survives legacy gesture");
+		Check(Cfg("target_fps").AsInt32() == 120, "legacy hold does not change config");
+		FramePacing.SetTargetFps(60, "test API");
+		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60,
+			"explicit API still supports testing 60 FPS");
 		FramePacing.OnLevelLoaded();
-		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.EffectiveFps == 60,
-			"new level does not override manually selected 60 FPS");
-
-		// 5-finger hold -> FPS overlay
+		Check(FramePacing.EffectiveFps == 60,
+			"new level does not override deliberately selected 60 FPS");
 		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 5);
 		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") != null, "5-finger hold shows FPS overlay");
+		Check(!FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") == null,
+			"5-finger hold cannot change FPS overlay settings");
+		FramePacing.SetTargetFps(120, "test API");
+		Check(FramePacing.Settings.TargetFps == 120, "explicit API restores 120");
 
-		// back to 120, then simulate a device that only reaches 60 -> fallback to 60 for the session
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 4);
-		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.TargetFps == 120, "toggle back to 120");
+		// Simulate a device only reaching 60 -> automatic session-only fallback.
 		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
 		Check(FramePacing.EffectiveFps == 60 && FramePacing.Settings.TargetFps == 120, "fallback lowers effective rate only");
 		Check(Engine.MaxFps == 60, "fallback caps engine at 60");

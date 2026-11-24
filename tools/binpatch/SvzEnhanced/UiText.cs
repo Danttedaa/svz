@@ -7,27 +7,23 @@ namespace Svz
 	/// <summary>
 	/// Readable bitmap-font text for the port (Store, Allies, dialogs, HUD), binary-patch route.
 	///
-	/// Optional outline: the patched GuiCanvas can draw an extra contrast halo. On current phones the extra
-	/// strokes can make the legacy stylized glyphs look doubled/hollow, so this is OFF by default. When enabled,
-	/// the first pass draws four cardinal offsets from a white alpha-only atlas; the normal glyphs are
-	/// always drawn in the second pass. Hold 2 fingers for 2 s to compare clean versus outlined text.
-	///
-	/// Size: see <see cref="UiFontQuality"/>. Hold 3 fingers for 2 s to switch between 100 % and 115 % (130 % clips the Store captions).
-	///
-	/// Settings: user://svz_ui.cfg, section [text]: scale (80..150%, default 100) and font_mode_v1.
-	/// Two-finger hold cycles solid-small-text, original and outlined modes; large headings remain original.
+	/// The original bitmap font is the default. The native font is an experimental
+	/// alternative only; a device comparison found it thinner and less legible.
+	/// There is exactly ONE gesture: hold two fingers for two seconds to switch
+	/// between readable and original text. No font-size, FPS or overlay holds.
+	/// Original decorated headings, character art, and game data remain untouched.
+	/// Settings: user://svz_ui.cfg, section [text], font_mode_v4.
 	/// </summary>
 	public static class UiText
 	{
 		public const string ConfigPath = "user://svz_ui.cfg";
 		public static bool Contrast = false;
-		public static int FontMode = UiInkPolicy.Solid;
+		public static int FontMode = UiInkPolicy.Original;
 		private static bool sHaloPass, sLoaded;
 		private static float sViewportHeight;
 		private static ulong sOffsetFrame = ulong.MaxValue;
 		private static float sOffset = 1f;
-		private static readonly HoldGesture sCycle = new HoldGesture(3, 2.0);
-		private static readonly HoldGesture sToggleOutline = new HoldGesture(2, 2.0);
+		private static readonly HoldGesture sTextToggle = new HoldGesture(2, 2.0);
 
 		private sealed class HaloAtlas { public Texture2D Texture; public float Luminance, Chroma; }
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
@@ -151,7 +147,7 @@ namespace Svz
 			try { return self.GetViewportRect().Size.Y; } catch (Exception) { return 1080f; }
 		}
 
-		/// Reads (and on first start writes) user://svz_ui.cfg and installs the 3-finger gesture.
+		/// Reads (and on first start writes) user://svz_ui.cfg. One two-finger toggle only.
 		public static void EnsureLoaded()
 		{
 			if (sLoaded) return;
@@ -160,18 +156,16 @@ namespace Svz
 			{
 				var cf = new ConfigFile();
 				bool exists = cf.Load(ConfigPath) == Error.Ok;
-				int scale = exists && cf.HasSectionKey("text", "scale") ? cf.GetValue("text", "scale").AsInt32() : (int)Math.Round(UiFontQuality.DefaultTextScale * 100);
-				// v1012 wrote contrast=true on first run, without an in-game way to turn it off.
-				// Do not carry that implicit legacy default forward. A new key records explicit opt-in.
-				int previousMode = exists && cf.HasSectionKey("text", "outline_v2") && cf.GetValue("text", "outline_v2").AsBool()
-					? UiInkPolicy.Outlined : UiInkPolicy.Solid;
-				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v1")
-					? cf.GetValue("text", "font_mode_v1").AsInt32() : previousMode;
-				FontMode = requestedMode >= UiInkPolicy.Solid && requestedMode <= UiInkPolicy.Outlined
-					? requestedMode : UiInkPolicy.Solid;
-				Contrast = FontMode == UiInkPolicy.Outlined;
-				UiFontQuality.TextScale = Math.Clamp(scale, (int)(UiFontQuality.MinTextScale * 100), (int)(UiFontQuality.MaxTextScale * 100)) / 100f;
-				if (!exists || !cf.HasSectionKey("text", "font_mode_v1")) Save();
+				// v1026 made the native font the default, but the phone A/B screenshots
+				// show that it is too thin and small. Migrate once to original via v4;
+				// subsequent user choices made with the sole text gesture persist.
+				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v4")
+					? cf.GetValue("text", "font_mode_v4").AsInt32() : UiInkPolicy.Original;
+				FontMode = requestedMode == UiInkPolicy.Native ? UiInkPolicy.Native : UiInkPolicy.Original;
+				Contrast = false;
+				UiFontQuality.TextScale = 1f;
+				if (!exists || !cf.HasSectionKey("text", "font_mode_v4") ||
+					!cf.HasSectionKey("text", "scale") || cf.GetValue("text", "scale").AsInt32() != 100) Save();
 				FramePacing.AfterFrame += OnFrame;
 				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, mode {UiInkPolicy.ModeName(FontMode)}, contrast {(Contrast ? "on" : "off")}");
 			}
@@ -187,27 +181,21 @@ namespace Svz
 			cf.SetValue("text", "scale", (int)Math.Round(UiFontQuality.TextScale * 100));
 			cf.SetValue("text", "contrast", Contrast); // compatibility if rolling back to v1012
 			cf.SetValue("text", "outline_v2", Contrast);
-			cf.SetValue("text", "font_mode_v1", FontMode);
+			cf.SetValue("text", "font_mode_v1", FontMode == UiInkPolicy.Native ? UiInkPolicy.Solid : FontMode);
+			cf.SetValue("text", "font_mode_v2", FontMode);
+			cf.SetValue("text", "font_mode_v3", FontMode);
+			cf.SetValue("text", "font_mode_v4", FontMode);
 			cf.Save(ConfigPath);
 		}
 
 		private static void OnFrame(double delta, int touchCount)
 		{
-			// A/B on the SAME phone/build isolates halo overdraw from HD glyph atlas issues.
-			if (sToggleOutline.Update(touchCount, delta))
-			{
-				FontMode = UiInkPolicy.NextMode(FontMode);
-				Contrast = FontMode == UiInkPolicy.Outlined;
-				Save();
-				FramePacing.Notify($"Text: {UiInkPolicy.ModeName(FontMode)}");
-				GD.Print($"[svz-ui] text mode {UiInkPolicy.ModeName(FontMode)}");
-			}
-			if (!sCycle.Update(touchCount, delta)) return;
-			int next = UiFontQuality.NextScaleStep((int)Math.Round(UiFontQuality.TextScale * 100));
-			UiFontQuality.SetTextScale(next / 100f);
+			if (!sTextToggle.Update(touchCount, delta)) return;
+			FontMode = FontMode == UiInkPolicy.Native ? UiInkPolicy.Original : UiInkPolicy.Native;
+			Contrast = false;
 			Save();
-			FramePacing.Notify($"Text size {next}%");
-			GD.Print($"[svz-ui] text scale {next}%");
+			FramePacing.Notify($"Text: {UiInkPolicy.ModeName(FontMode)}");
+			GD.Print($"[svz-ui] text mode {UiInkPolicy.ModeName(FontMode)}");
 		}
 
 		/// Hook after SUILabel's font load: read the settings, then scale the font once.

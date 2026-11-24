@@ -8,5 +8,6 @@
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiFontQuality.cs" Link="UiFontQuality.cs" />
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiInkPolicy.cs" Link="UiInkPolicy.cs" />
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiReadablePolicy.cs" Link="UiReadablePolicy.cs" />
+    <Compile Include="../../tools/binpatch/SvzEnhanced/UiGlyphSampling.cs" Link="UiGlyphSampling.cs" />
   </ItemGroup>
 </Project>

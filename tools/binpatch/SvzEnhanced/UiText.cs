@@ -80,7 +80,14 @@ namespace Svz
 								(float)filtered.Texture.GetWidth() / texture.GetWidth(),
 								(float)filtered.Texture.GetHeight() / texture.GetHeight());
 							var mapped = new Rect2(srcRect.Position * fs, srcRect.Size * fs);
-							self.DrawTextureRectRegion(filtered.Texture, rect, mapped, modulate, transpose, clipUv);
+							// Keep disabled labels visibly disabled, but avoid near-invisible
+							// monochrome text on textured panels. Never revive zero-alpha text.
+							var tint = modulate ?? Colors.White;
+							float chroma = Math.Max(tint.R, Math.Max(tint.G, tint.B)) -
+								Math.Min(tint.R, Math.Min(tint.G, tint.B));
+							if (chroma <= 0.16f && tint.A >= 0.20f && tint.A < 0.65f)
+								tint.A = 0.65f;
+							self.DrawTextureRectRegion(filtered.Texture, rect, mapped, tint, transpose, clipUv);
 							if (!sLoggedSmoothedGlyph)
 							{
 								sLoggedSmoothedGlyph = true;
@@ -156,7 +163,20 @@ namespace Svz
 				img.Convert(Image.Format.Rgba8);
 				int width = UiGlyphSampling.HalfSize(img.GetWidth());
 				int height = UiGlyphSampling.HalfSize(img.GetHeight());
+				// Filter premultiplied RGB so transparent texels cannot bleed
+				// arbitrary colors into visible letter edges. Restore straight
+				// alpha before handing the texture to Godot's normal blend mode.
+				img.PremultiplyAlpha();
 				img.Resize(width, height, Image.Interpolation.Lanczos);
+				var straight = img.GetData();
+				for (int p = 0; p < straight.Length; p += 4)
+				{
+					int alpha = straight[p + 3];
+					if (alpha == 0) continue;
+					for (int c = 0; c < 3; c++)
+						straight[p + c] = (byte)Math.Min(255, (straight[p + c] * 255 + alpha / 2) / alpha);
+				}
+				img = Image.CreateFromData(width, height, false, Image.Format.Rgba8, straight);
 				// The hand-painted font contains narrow transparent scratches.
 				// On 720p screens some scratches become isolated holes after
 				// minification. Repair only pixels surrounded by existing ink;

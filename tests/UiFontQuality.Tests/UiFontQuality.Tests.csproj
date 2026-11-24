@@ -9,5 +9,6 @@
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiInkPolicy.cs" Link="UiInkPolicy.cs" />
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiReadablePolicy.cs" Link="UiReadablePolicy.cs" />
     <Compile Include="../../tools/binpatch/SvzEnhanced/UiGlyphSampling.cs" Link="UiGlyphSampling.cs" />
+    <Compile Include="../../tools/binpatch/SvzEnhanced/UiGlyphAlphaRepair.cs" Link="UiGlyphAlphaRepair.cs" />
   </ItemGroup>
 </Project>

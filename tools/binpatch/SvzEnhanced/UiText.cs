@@ -7,18 +7,18 @@ namespace Svz
 	/// <summary>
 	/// Readable bitmap-font text for the port (Store, Allies, dialogs, HUD), binary-patch route.
 	///
-	/// Readable native font is the default for small interface labels. The original
-	/// bitmap renderer remains available for unsupported text and as a rollback.
+	/// The original bitmap font is the default. The native font is an experimental
+	/// alternative only; a device comparison found it thinner and less legible.
 	/// There is exactly ONE gesture: hold two fingers for two seconds to switch
 	/// between readable and original text. No font-size, FPS or overlay holds.
 	/// Original decorated headings, character art, and game data remain untouched.
-	/// Settings: user://svz_ui.cfg, section [text], font_mode_v3.
+	/// Settings: user://svz_ui.cfg, section [text], font_mode_v4.
 	/// </summary>
 	public static class UiText
 	{
 		public const string ConfigPath = "user://svz_ui.cfg";
 		public static bool Contrast = false;
-		public static int FontMode = UiInkPolicy.Native;
+		public static int FontMode = UiInkPolicy.Original;
 		private static bool sHaloPass, sLoaded;
 		private static float sViewportHeight;
 		private static ulong sOffsetFrame = ulong.MaxValue;
@@ -156,16 +156,15 @@ namespace Svz
 			{
 				var cf = new ConfigFile();
 				bool exists = cf.Load(ConfigPath) == Error.Ok;
-				// The earlier experimental release exposed three outline/style choices
-				// and a size hold. Retire those controls, return to 100% layout scale
-				// and upgrade to the readable font once. Only a user selection recorded
-				// by this new version (v3) survives a restart.
-				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v3")
-					? cf.GetValue("text", "font_mode_v3").AsInt32() : UiInkPolicy.Native;
-				FontMode = requestedMode == UiInkPolicy.Original ? UiInkPolicy.Original : UiInkPolicy.Native;
+				// v1026 made the native font the default, but the phone A/B screenshots
+				// show that it is too thin and small. Migrate once to original via v4;
+				// subsequent user choices made with the sole text gesture persist.
+				int requestedMode = exists && cf.HasSectionKey("text", "font_mode_v4")
+					? cf.GetValue("text", "font_mode_v4").AsInt32() : UiInkPolicy.Original;
+				FontMode = requestedMode == UiInkPolicy.Native ? UiInkPolicy.Native : UiInkPolicy.Original;
 				Contrast = false;
 				UiFontQuality.TextScale = 1f;
-				if (!exists || !cf.HasSectionKey("text", "font_mode_v3") ||
+				if (!exists || !cf.HasSectionKey("text", "font_mode_v4") ||
 					!cf.HasSectionKey("text", "scale") || cf.GetValue("text", "scale").AsInt32() != 100) Save();
 				FramePacing.AfterFrame += OnFrame;
 				GD.Print($"[svz-ui] text scale {UiFontQuality.TextScale:0.00}x, mode {UiInkPolicy.ModeName(FontMode)}, contrast {(Contrast ? "on" : "off")}");
@@ -185,6 +184,7 @@ namespace Svz
 			cf.SetValue("text", "font_mode_v1", FontMode == UiInkPolicy.Native ? UiInkPolicy.Solid : FontMode);
 			cf.SetValue("text", "font_mode_v2", FontMode);
 			cf.SetValue("text", "font_mode_v3", FontMode);
+			cf.SetValue("text", "font_mode_v4", FontMode);
 			cf.Save(ConfigPath);
 		}
 

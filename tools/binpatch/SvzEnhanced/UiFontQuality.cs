@@ -46,10 +46,11 @@ namespace Svz
 			}
 			// Diagnostic startup override: restore the port's native font selection
 			// without changing normal builds or saved player settings.
-			bool nativeBaseline = Environment.GetCommandLineArgs().Contains("--test-native-font-baseline");
+			bool nativeBaseline = Array.IndexOf(Godot.OS.GetCmdlineUserArgs(), "--test-native-font-baseline") >= 0;
 			int chosen = !nativeBaseline && screenHeight >= 700 && screenHeight <= 1536 && supported.Contains(1536) ? 1536 : closest;
 			NearestResolution = closest;
 			SelectedResolution = chosen;
+			if (nativeBaseline) Godot.GD.Print($"[svz-ui] native font baseline: nearest={closest} selected={chosen}");
 			return chosen.ToString(CultureInfo.InvariantCulture);
 		}
 

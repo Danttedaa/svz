@@ -30,7 +30,7 @@ namespace Svz
 		private static readonly ConditionalWeakTable<Texture2D, HaloAtlas> sAtlases = new();
 		private sealed class PrefilterAtlas { public Texture2D Texture; }
 		private static readonly ConditionalWeakTable<Texture2D, PrefilterAtlas> sPrefilter = new();
-		private static bool sLoggedSmoothedGlyph;
+		private static bool sLoggedSmoothedGlyph, sLoggedSamplingGate;
 
 		/// Narrow one-pixel outline at 1080p; avoid obscuring the thin legacy glyph interiors.
 		public static float HaloOffset(float screenHeight) => Math.Max(0.8f, screenHeight / 1080f);
@@ -62,9 +62,16 @@ namespace Svz
 				if (FontMode == UiInkPolicy.SmoothedOriginal)
 				{
 					if (sViewportHeight <= 0f) sViewportHeight = ViewHeight(self);
-					if (UiGlyphSampling.UseHalfAtlas(UiFontQuality.NearestResolution,
-						UiFontQuality.SelectedResolution, Math.Abs(rect.Size.Y),
-						sViewportHeight, texture.GetWidth(), texture.GetHeight()))
+					int nearest = UiFontQuality.NearestResolution, selected = UiFontQuality.SelectedResolution;
+					float glyphHeight = Math.Abs(rect.Size.Y);
+					int atlasWidth = texture.GetWidth(), atlasHeight = texture.GetHeight();
+					if (!sLoggedSamplingGate)
+					{
+						sLoggedSamplingGate = true;
+						GD.Print($"[svz-ui] font prefilter diagnostics: nearest={nearest} selected={selected} glyph={glyphHeight:0.0} viewport={sViewportHeight:0.0} atlas={atlasWidth}x{atlasHeight}");
+					}
+					if (UiGlyphSampling.UseHalfAtlas(nearest, selected, glyphHeight,
+						sViewportHeight, atlasWidth, atlasHeight))
 					{
 						var filtered = sPrefilter.GetValue(texture, MakePrefilterAtlas);
 						if (filtered.Texture != null)
@@ -136,8 +143,16 @@ namespace Svz
 			try
 			{
 				var img = source.GetImage();
-				if (img == null || img.IsEmpty()) return result;
-				if (img.IsCompressed() && img.Decompress() != Error.Ok) return result;
+				if (img == null || img.IsEmpty())
+				{
+					GD.Print("[svz-ui] original-font prefilter unavailable: source image empty");
+					return result;
+				}
+				if (img.IsCompressed() && img.Decompress() != Error.Ok)
+				{
+					GD.Print("[svz-ui] original-font prefilter unavailable: source decompress failed");
+					return result;
+				}
 				img.Convert(Image.Format.Rgba8);
 				int width = UiGlyphSampling.HalfSize(img.GetWidth());
 				int height = UiGlyphSampling.HalfSize(img.GetHeight());

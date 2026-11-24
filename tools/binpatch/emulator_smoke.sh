@@ -107,9 +107,19 @@ else
         fail+=("store: experimental native font drew without user selecting it")
       fi
     fi
-    # stage 3: deliberately test the OPTIONAL prefiltered ORIGINAL glyphs.
-    # This flag is restricted to an emulator-only command-line test variant.
-    if launch_level store-hd 3 45 --level=3 --test-original-hd; then
+    # Stage 3 must approximate the PHONE font-resolution class (768-base,
+    # 1536-selected). The CI emulator normally exposes just 320 game pixels
+    # and a 256x256 legacy font; it CANNOT exercise the HD-only filter.
+    # Android's native display is portrait, while the game is landscape.
+    note "store-hd: display before override $(adb shell wm size | tr -d '\r')"
+    if adb shell wm size 720x1280 >/dev/null 2>&1; then
+      note "store-hd: display override $(adb shell wm size | tr -d '\r')"
+      sleep 3
+    else
+      warn+=("store-hd: Android emulator cannot set phone-size display")
+    fi
+    # The debug mode is packaged only in an emulator test variant.
+    if launch_level store-hd 3 60 --level=3 --test-original-hd; then
       grep -q "\[svz-ui\] text scale .*mode original HD, contrast off" "$out/logcat-store-hd.txt" \
         || fail+=("store-hd: prefiltered-original A/B mode did not initialize")
       if grep -q "\[svz-ui\] prefiltered original font glyph rendered" "$out/logcat-store-hd.txt"; then
@@ -120,6 +130,7 @@ else
       grep -o '\[svz-ui\] font prefilter diagnostics:.*\|\[svz-ui\] original-font prefilter unavailable:.*\|\[svz-ui\] original-font atlas prefiltered:.*' \
         "$out/logcat-store-hd.txt" | head -8 | sed 's/^/store-hd: /' >> "$out/details.txt" || true
     fi
+    adb shell wm size reset >/dev/null 2>&1 || warn+=("store-hd: could not restore emulator display size")
     # stage 4: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then
       grep -q "\[svz\] killed" "$out/logcat-battle.txt" && note "battle: $(grep -m1 -o '\[svz\] killed.*' "$out/logcat-battle.txt")"

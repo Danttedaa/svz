@@ -147,6 +147,40 @@ internal static class Test
 			"invalid metrics fall back to original rendering");
 		Ok(UiReadablePolicy.FontSize(32) == 27,
 			"native font sized to match measured legacy line height");
-		Console.WriteLine($"[test] {passed} HD font selection and small-text clarity assertions passed");
+		// A source-authentic pixel fill: only one isolated interior pinhole is
+		// repaired; outer edges, letter counters, color and neighboring pixels
+		// remain untouched. This is applied to a cached atlas, never in combat.
+		var pixels = new byte[7 * 7 * 4];
+		void Ink(int x, int y, byte r = 22, byte g = 44, byte b = 66)
+		{
+			int i = (y * 7 + x) * 4;
+			pixels[i] = r; pixels[i + 1] = g; pixels[i + 2] = b; pixels[i + 3] = 255;
+		}
+		Ink(2, 3); Ink(4, 3); Ink(3, 2);
+		Ok(UiGlyphAlphaRepair.Repair(pixels, 7, 7) == 1,
+			"one three-sided pinhole healed without changing silhouette");
+		Ok(pixels[(3 * 7 + 3) * 4 + 3] == 220 &&
+			pixels[(3 * 7 + 3) * 4] == 22,
+			"repaired pixel gets neighboring ink color and bounded opacity");
+		Ok(pixels[(3 * 7 + 1) * 4 + 3] == 0,
+			"outer transparent background remains untouched");
+		Ok(UiGlyphAlphaRepair.Repair(pixels, 7, 7) == 0,
+			"repeated repair is idempotent on filled pinholes");
+		var ring = new byte[8 * 8 * 4];
+		for (int y = 1; y < 7; y++) for (int x = 1; x < 7; x++)
+		{
+			int i = (y * 8 + x) * 4;
+			ring[i] = 7; ring[i + 1] = 11; ring[i + 2] = 21; ring[i + 3] = 255;
+		}
+		for (int y = 3; y <= 4; y++) for (int x = 3; x <= 4; x++)
+			ring[(y * 8 + x) * 4 + 3] = 0;
+		Ok(UiGlyphAlphaRepair.Repair(ring, 8, 8) == 0 &&
+			ring[(3 * 8 + 3) * 4 + 3] == 0,
+			"two-pixel letter counters stay open");
+		bool badSize = false;
+		try { UiGlyphAlphaRepair.Repair(new byte[10], 7, 7); }
+		catch (ArgumentException) { badSize = true; }
+		Ok(badSize, "corrupt pixel buffers fail without drawing");
+		Console.WriteLine($"[test] {passed} HD font selection and original-glyph repair assertions passed");
 	}
 }

@@ -137,6 +137,12 @@ else
       grep -o '\[svz-ui\] font prefilter diagnostics:.*\|\[svz-ui\] original-font prefilter unavailable:.*\|\[svz-ui\] original-font atlas prefiltered:.*' \
         "$out/logcat-store-hd.txt" | head -8 | sed 's/^/store-hd: /' >> "$out/details.txt" || true
     fi
+    # Compare the same store at the same display size without forced HD selection.
+    if launch_level store-native 3 60 --level=3 --test-native-font-baseline; then
+      grep -Fq "[svz-ui] native font baseline: nearest=768 selected=768" "$out/logcat-store-native.txt" || fail+=("store-native: native resolution not verified")
+    else
+      fail+=("store-native: baseline not exercised")
+    fi
     adb shell wm size reset >/dev/null 2>&1 || warn+=("store-hd: could not restore emulator display size")
     # stage 4: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then

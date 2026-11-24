@@ -78,6 +78,8 @@ launch_level() {   # stage level seconds args...
 }
 
 adb wait-for-device
+# Acknowledge Android immersive-mode education on the disposable CI emulator.
+adb shell settings put secure immersive_mode_confirmations confirmed >/dev/null 2>&1 || warn+=("could not acknowledge emulator fullscreen education")
 abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r'); note "emulator ABIs: $abi"
 if ! adb install -r --no-incremental "$apk" > "$out/install.txt" 2>&1; then
   fail+=("install failed: $(tail -1 "$out/install.txt")")

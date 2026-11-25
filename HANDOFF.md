@@ -1,3 +1,34 @@
+# Current continuation: 2026-11-25
+
+Branch: `enhanced/m27-native-font-baseline`. Preserve original designs, 120 FPS
+ceiling, accepted combat fixes, and exactly one two-finger text toggle.
+
+Private build 39 (`3c66e46292f6`, run 45594557562) remained alive and exercised
+Store original, original-HD, native-768 baseline, and battle. Font logs verified
+768/1536 selection and actual prefiltered glyph draws. Smoke correctly failed:
+Android screencaps were only 1598/5338 bytes; no valid visual comparison yet.
+Battle reported zero kills, so that run does not prove crowded-wave/death behavior.
+
+Next diagnostic build adds `--test-capture-frame=<path>` only to emulator APK
+variants. It captures the Godot viewport after drawing at 20 seconds, keeps the
+app running, and logs dimensions plus sampled color count. The normal APK has no
+capture argument. `viewport-*.png` complements, and does not override, Android
+screen verification. Blank-screen failures now log focus/surface/power summaries.
+
+Private workflow must publish `emulator-diagnostics` with smoke PNGs and text only,
+7-day retention. APKs, inputs and keys must never be workflow artifacts. Retrieve
+this artifact through the GitHub connector to inspect frames without browser auth.
+Compare viewport and Android screenshots before changing font rendering again.
+
+Local verification: Python 61 passed / 1 skipped; policy 42 passed; corpse safety
+10090 cases; font policy 70 assertions; snapshots 9; binary-patch behavior 18 checks.
+Godot runtime, bridge and restart tests passed; the new capture callback compiles.
+Android capture itself still needs the private emulator run.
+
+---
+
+# Historical handoff (superseded by the continuation above)
+
 # SvZ Enhanced: handoff (2026-11-23, evening)
 
 For whoever continues this work (human or another AI assistant). Game files, decompiled game code, game

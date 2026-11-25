@@ -29,7 +29,7 @@ private Danttedaa/svz-private   template: ci/private/repo/ (workflow, ci/*.sh|py
 
 ## Security model
 
-- The workflow refuses to run in a public repository; nothing from it is uploaded as an Actions artifact.
+- The workflow refuses to run in a public repository; only smoke-test PNGs and text diagnostics may be uploaded as private Actions artifacts, expiring after 7 days. APKs, game inputs and signing material are excluded.
 - The release key exists in plain form only on the runner during a build (deleted at the end). In the
   repository it is AES-256 encrypted (PBKDF2-SHA256, 600,000 iterations) with the passphrase, which is a
   GitHub secret: it cannot be read back, not by Claude either. Backup = encrypted file + passphrase.

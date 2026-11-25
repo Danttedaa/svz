@@ -68,7 +68,8 @@ launch_app() {   # stage: do not discard launcher failures
 launch_level() {   # stage level seconds args...
   local stage="$1" level="$2" secs="$3"; shift 3
   local log="$out/logcat-$stage.txt" variant
-  if ! variant=$(make_variant "$stage" "$@"); then
+  local viewport="/sdcard/Android/data/$pkg/files/svz-smoke.png"
+  if ! variant=$(make_variant "$stage" "$@" "--test-capture-frame=$viewport"); then
     fail+=("$stage: could not build the required emulator test variant"); return 1
   fi
   adb uninstall "$pkg" > /dev/null 2>&1
@@ -81,6 +82,9 @@ launch_level() {   # stage level seconds args...
   sleep "$secs"
   local pid; pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot-$stage.png" 2>/dev/null || rm -f "$out/screenshot-$stage.png"
+  # Keep both views: Android compositor and the actual Godot viewport.
+  # A direct frame is diagnostic evidence; it does not bypass the screen check.
+  adb pull "$viewport" "$out/viewport-$stage.png" >> "$out/details.txt" 2>&1 || true
   # Reject blank screens and system overlays instead of accepting log-only evidence.
   if [[ "$stage" == store* ]]; then
     local bytes=0
@@ -88,6 +92,10 @@ launch_level() {   # stage level seconds args...
     if [ "$bytes" -lt 20000 ]; then
       fail+=("$stage: screenshot too small for visual verification ($bytes bytes)")
       adb shell dumpsys window > "$out/window-$stage.txt" 2>&1
+      grep -E 'mCurrentFocus|mFocusedApp|mObscuringWindow|mHoldScreenWindow|isOnScreen|mHasSurface|mViewVisibility' \
+        "$out/window-$stage.txt" | head -35 | sed "s/^/$stage window: /" >> "$out/details.txt" || true
+      adb shell dumpsys power | grep -E 'mWakefulness=|Display Power:|mHoldingDisplaySuspendBlocker=' \
+        | sed "s/^/$stage power: /" >> "$out/details.txt" || true
     fi
   fi
   adb logcat -d > "$log"

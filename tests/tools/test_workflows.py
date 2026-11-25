@@ -113,7 +113,17 @@ class PrivateWorkflow(unittest.TestCase):
             text = read(wf)
             name = os.path.basename(wf)
             self.assertIn("bash ci/ensure_key.sh", text, name)
-            self.assertNotIn("upload-artifact", text, name)
+            # Only private smoke diagnostics may use expiring workflow artifacts.
+            # APKs, game inputs and signing material stay in private releases.
+            uploads = re.findall(r"uses: actions/upload-artifact@[^\n]*\n((?:\s{8,}[^\n]*\n)*)", text)
+            for block in uploads:
+                self.assertIn("name: emulator-diagnostics", block, name)
+                paths = re.findall(r"^            (.+)$", block, re.M)
+                self.assertEqual(set(paths), {
+                    "${{ runner.temp }}/smoke/screenshot*.png",
+                    "${{ runner.temp }}/smoke/viewport-*.png",
+                    "${{ runner.temp }}/smoke/*.txt",
+                }, name)
             if yaml is not None:
                 doc = yaml.safe_load(text)
                 for st in steps(doc):

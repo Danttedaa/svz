@@ -39,6 +39,10 @@ namespace Svz
 		public static void Notify(string text) => sNotify?.Invoke(text);
 
 		private static Node sRoot;
+		// Enabled only in packaged diagnostic variants; never persisted in player settings.
+		private static string sCapturePath;
+		private static bool sCaptureQueued;
+		private static double sCaptureRemaining = -1;
 		private static Action<string> sNotify;
 		private static FallbackMonitor sMonitor;
 		private static bool sFallenBack;
@@ -52,6 +56,10 @@ namespace Svz
 		public static void Init(Node root, Action<string> notify)
 		{
 			sRoot = root;
+			if (sCaptureQueued) RenderingServer.FramePostDraw -= CaptureDiagnosticFrame;
+			sCaptureQueued = false;
+			sCapturePath = null;
+			sCaptureRemaining = -1;
 			sNotify = notify;
 			Settings = Load();
 			foreach (var a in OS.GetCmdlineUserArgs())
@@ -60,6 +68,11 @@ namespace Svz
 					Settings.TargetFps = FrameSettings.Sanitize(f, Settings.TargetFps);
 				if (a == "--show-fps") Settings.ShowFps = true;
 				if (a == "--no-fallback") Settings.AutoFallback = false;
+				if (a.StartsWith("--test-capture-frame=", StringComparison.Ordinal))
+				{
+					sCapturePath = a.Substring("--test-capture-frame=".Length);
+					if (!string.IsNullOrWhiteSpace(sCapturePath)) sCaptureRemaining = 20;
+				}
 			}
 			DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Enabled);
 			sMonitor = new FallbackMonitor(Settings.TargetFps);
@@ -97,7 +110,38 @@ namespace Svz
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
 			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
 			UpdateOverlay(delta);
+			if (sCaptureRemaining > 0 && (sCaptureRemaining -= delta) <= 0)
+			{
+				sCaptureQueued = true;
+				RenderingServer.FramePostDraw += CaptureDiagnosticFrame;
+			}
 			AfterFrame?.Invoke(delta, touchCount);
+		}
+
+		// Capture the actual rendered viewport after the draw completes, independently
+		// of Android's screen compositor. Keep the app running for the normal liveness test.
+		private static void CaptureDiagnosticFrame()
+		{
+			RenderingServer.FramePostDraw -= CaptureDiagnosticFrame;
+			sCaptureQueued = false;
+			try
+			{
+				using var image = sRoot.GetViewport().GetTexture().GetImage();
+				if (image == null || image.IsEmpty()) { Log("diagnostic capture: empty viewport"); return; }
+				string path = ProjectSettings.GlobalizePath(sCapturePath);
+				string dir = System.IO.Path.GetDirectoryName(path);
+				var mkdir = DirAccess.MakeDirRecursiveAbsolute(dir);
+				if (mkdir != Error.Ok && mkdir != Error.AlreadyExists)
+				{ Log($"diagnostic capture: directory failed: {mkdir}"); return; }
+				var result = image.SavePng(path);
+				var colors = new HashSet<uint>();
+				int width = image.GetWidth(), height = image.GetHeight();
+				for (int y = 0; y < height; y += Math.Max(1, height / 64))
+					for (int x = 0; x < width; x += Math.Max(1, width / 64))
+						colors.Add(image.GetPixel(x, y).ToRgba32());
+				Log($"diagnostic capture: {result}, {width}x{height}, sampledColors={colors.Count}, {path}");
+			}
+			catch (Exception e) { Log("diagnostic capture failed: " + e.Message); }
 		}
 
 		/// Change the saved frame-rate target (for menus and tools); clears a session fallback.

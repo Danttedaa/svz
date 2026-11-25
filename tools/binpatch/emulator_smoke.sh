@@ -66,6 +66,15 @@ launch_level() {   # stage level seconds args...
   sleep "$secs"
   local pid; pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot-$stage.png" 2>/dev/null || rm -f "$out/screenshot-$stage.png"
+  # Reject blank screens and system overlays instead of accepting log-only evidence.
+  if [[ "$stage" == store* ]]; then
+    local bytes=0
+    if [ -f "$out/screenshot-$stage.png" ]; then bytes=$(wc -c < "$out/screenshot-$stage.png"); fi
+    if [ "$bytes" -lt 20000 ]; then
+      fail+=("$stage: screenshot too small for visual verification ($bytes bytes)")
+      adb shell dumpsys window > "$out/window-$stage.txt" 2>&1
+    fi
+  fi
   adb logcat -d > "$log"
   [ -n "$pid" ] || fail+=("$stage: app not running after ${secs}s")
   check_errors "$stage" "$log"

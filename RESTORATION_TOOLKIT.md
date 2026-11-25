@@ -94,3 +94,21 @@ glyph geometry, text layout and gesture policy are unchanged. Runtime tests cove
 all 256 alpha values, source immutability and foreground/shadow tint behavior.
 The Store was rendered locally with the pinned port and Godot 4.7.2; Android
 verification and device acceptance remain separate requirements.
+
+## Render bridge cost and quality
+
+`RenderQuality` caches bridge-owned state per weak Godot object identity and
+skips exact duplicate writes. Animated bone scale is a common unchanged value;
+positions and rotations are not frozen. Do not use this cache for shared state
+that another system can modify. Recreated mesh nodes/skeletons get fresh state.
+
+Camera-only 2x MSAA smooths geometry while the separate GUI retains its accepted
+font draw path. Under sustained overload, remove optional MSAA and retry the
+selected FPS once before the existing fallback. `--graphics=original` disables
+MSAA for comparisons. The diagnostics record managed process/render-sync CPU
+time plus native writes skipped; neither timer measures asynchronous GPU cost.
+
+For real game-world comparisons, launch MainMenu (`--level=1`) and tap Start
+(`--tap=3:0.5:0.74`) rather than jumping directly into InGame. Require an actual
+nonzero combat workload before claiming battle performance. Local software
+rasterization and Store FPS cannot establish phone GPU performance.

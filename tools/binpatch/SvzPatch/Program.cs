@@ -256,6 +256,7 @@ internal static class Program
 		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
 		PatchTextHalo(module, uiTextRef);
 		PatchNativeSmallText(module, new TypeReference("Svz", "UiReadableText", module, asmRef));
+		PatchRenderQuality(module, new TypeReference("Svz", "RenderQuality", module, asmRef));
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 		PatchParticleArrayReuse(module, new TypeReference("Svz", "ParticleArrayReuse", module, asmRef));
@@ -807,6 +808,67 @@ internal static class Program
 				i.Operand is TypeReference t && t.FullName == "System.Int32");
 	}
 
+	private static readonly Dictionary<string, string> RenderSetters = new()
+	{
+		["set_Visible"] = "Visible", ["set_Layers"] = "Layers",
+		["set_CastShadow"] = "Shadow", ["set_GlobalTransform"] = "Transform"
+	};
+	private static void PatchRenderQuality(ModuleDefinition module, TypeReference helper)
+	{
+		int count = 0;
+		foreach (var i in Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions)
+		{
+			if (i.Operand is not MethodReference old || !old.DeclaringType.FullName.StartsWith("Godot.") ||
+				!RenderSetters.TryGetValue(old.Name, out var name)) continue;
+			Require(old.HasThis && old.Parameters.Count == 1, "render setter signature");
+			var hook = new MethodReference(name, module.TypeSystem.Void, helper) { HasThis = false };
+			hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+			hook.Parameters.Add(new ParameterDefinition(old.Parameters[0].ParameterType));
+			i.OpCode = OpCodes.Call; i.Operand = hook; count++;
+		}
+		Require(count == 8, "expected eight render-state setters");
+		var size = Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Where(i =>
+			i.Operand is MethodReference m && m.Name == "set_Size" && m.DeclaringType.FullName == "Godot.SubViewport").ToList();
+		Require(size.Count == 1, "one camera viewport size setter");
+		var oldSize = (MethodReference)size[0].Operand;
+		var setSize = new MethodReference("Size", module.TypeSystem.Void, helper) { HasThis = false };
+		setSize.Parameters.Add(new ParameterDefinition(oldSize.DeclaringType));
+		setSize.Parameters.Add(new ParameterDefinition(oldSize.Parameters[0].ParameterType));
+		size[0].OpCode = OpCodes.Call; size[0].Operand = setSize;
+		var scales = Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Where(i =>
+            Calls(i, "Godot.Skeleton3D", "SetBonePoseScale")).ToList();
+        Require(scales.Count == 1, "one skinning bone-scale submission site");
+        var scaleMethod = (MethodReference)scales[0].Operand;
+        var scaleHook = new MethodReference("BoneScale", module.TypeSystem.Void, helper) { HasThis = false };
+        scaleHook.Parameters.Add(new ParameterDefinition(scaleMethod.DeclaringType));
+        foreach (var parameter in scaleMethod.Parameters) scaleHook.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
+        scales[0].OpCode = OpCodes.Call; scales[0].Operand = scaleHook;
+        TimeMethod(Method(module, "Svz.Render", "Sync", 0), "BeginRender", "EndRender");
+		TimeMethod(Method(module, "Svz.Main", "_Process", 1), "BeginFrame", "EndFrame");
+		Require(RenderQualityPatched(module), "render-quality hooks installed");
+
+		void TimeMethod(MethodDefinition method, string begin, string end)
+		{
+			method.Body.SimplifyMacros();
+			var il = method.Body.GetILProcessor();
+			il.InsertBefore(method.Body.Instructions[0], il.Create(OpCodes.Call,
+				new MethodReference(begin, module.TypeSystem.Void, helper) { HasThis = false }));
+			foreach (var ret in method.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+			{
+				// Keep return branch targets attached to the timing call.
+				ret.OpCode = OpCodes.Call;
+				ret.Operand = new MethodReference(end, module.TypeSystem.Void, helper) { HasThis = false };
+				il.InsertAfter(ret, il.Create(OpCodes.Ret));
+			}
+			method.Body.OptimizeMacros();
+		}
+	}
+	private static bool RenderQualityPatched(ModuleDefinition module) =>
+		Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Count(i =>
+			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.RenderQuality" && r.DeclaringType.Scope.Name == Enh) == 8 &&
+		Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "Size")) &&
+        Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "BoneScale"));
+
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
 	private static void PatchPerFrameLookups(ModuleDefinition module, TypeReference reuse)
@@ -933,6 +995,7 @@ internal static class Program
 			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("small labels can bypass distressed bitmap font with a native fallback", NativeSmallTextPatched(m)),
+			("render state skips unchanged native writes and cameras use adaptive AA", RenderQualityPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
 			("all four particle mesh arrays reused on equal-size frames", ParticleArrayReusePatched(m)),

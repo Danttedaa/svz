@@ -156,8 +156,9 @@ namespace Svz
 
 		public override void _Process(double delta)
 		{
+			RenderQuality.BeginFrame();
 			FramePacing.Frame(delta, InputState.FingersDown);
-			if (Movie.Playing) { Movie.Update(); DebugAutomation(delta); return; }
+			if (Movie.Playing) { Movie.Update(); DebugAutomation(delta); RenderQuality.EndFrame(); return; }
 			float dt = Mathf.Min((float)delta, Time.__maxDt) * Time.__scale;
 			Time.__dt = dt;
 			Time.__unscaled += (float)delta;
@@ -194,6 +195,7 @@ namespace Svz
 			DebugAutomation(delta);
 			mPrefsTimer += delta;
 			if (mPrefsTimer > 5) { mPrefsTimer = 0; Prefs.Flush(); }
+			RenderQuality.EndFrame();
 		}
 
 		public void Screenshot(string filename)

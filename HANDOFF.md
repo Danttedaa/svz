@@ -1,3 +1,35 @@
+# Graphics and performance continuation: 2026-11-25
+
+Accepted phone baseline: engine `3ed660b7aef8962c87f629d6e795cca1f8ea514d`
+(private build 1046). User confirmed the font rendering is perfect. The Shop
+screenshot reports 120 FPS. The subsequent combat screenshot reports fallback
+from roughly 70 FPS to 60; sustained 120 FPS combat is NOT accepted yet.
+Preserve the original characters, accepted font rendering and single existing
+hold gesture. Do not treat Store FPS or a tutorial scene as crowded combat proof.
+
+Current pass adds adaptive 2x MSAA only to camera SubViewports (not the GUI),
+and skips unchanged bridge-owned visibility, layers, shadow mode, transforms,
+viewport sizes and bone scales. Cache keys are weak node identities; exact value
+comparisons preserve subpixel movement and changing poses. These helpers must
+not be used on state another system writes. Mesh/skeleton replacement gets a
+fresh cache via its new Godot object. Bone positions/rotations remain live.
+
+Remove optional MSAA and retry the selected target once before dropping to
+60 FPS. New-level loads reset that quality budget. Existing frame pacing,
+120 ceiling and persistent settings are retained. `--graphics=original` gives
+an A/B rendering baseline without another touch gesture. The existing diagnostic
+FPS overlay now includes CPU process/render-sync time and AA state. CPU times
+exclude asynchronous GPU rendering and are not GPU measurements.
+
+Local validation uses the exact pinned port APK and real Godot 4.7.2 runtime.
+Entering through MainMenu and pressing Start creates a valid game world; loading
+InGame directly previously missed initialization and produced a blue tutorial.
+A fresh-profile tutorial is useful for visual comparisons but does not validate
+crowded combat or sustained phone FPS. Never publish game images/assets/APKs
+in the public repository. Phone verification of this graphics pass remains open.
+
+---
+
 # Latest acceptance work: 2026-11-25
 
 Draft PR: https://github.com/Danttedaa/svz/pull/25

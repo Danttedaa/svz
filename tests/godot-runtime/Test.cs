@@ -232,6 +232,61 @@ public partial class Test : Node
 		catch (System.ArgumentException) { badCoverage = true; }
 		Check(badCoverage, "invalid coverage dimensions fail before texture allocation");
 
+		var meshNode = new MeshInstance3D();
+		AddChild(meshNode);
+		long submittedBefore = RenderQuality.Submitted, skippedBefore = RenderQuality.Skipped;
+		for (int f = 0; f < 1000; f++)
+		{
+			RenderQuality.Visible(meshNode, true);
+			RenderQuality.Layers(meshNode, 3);
+			RenderQuality.Shadow(meshNode, GeometryInstance3D.ShadowCastingSetting.Off);
+			RenderQuality.Transform(meshNode, Transform3D.Identity);
+		}
+		Check(RenderQuality.Submitted - submittedBefore == 4 && RenderQuality.Skipped - skippedBefore == 3996,
+			"1000 unchanged render frames submit four writes, skip 3996");
+		Check(meshNode.Visible && meshNode.Layers == 3 && meshNode.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+			"initial render state actually reaches Godot");
+		RenderQuality.Visible(meshNode, false); RenderQuality.Layers(meshNode, 7);
+		var moved = Transform3D.Identity; moved.Origin = new Vector3(0.000001f, 2, 3);
+		RenderQuality.Transform(meshNode, moved);
+		Check(!meshNode.Visible && meshNode.Layers == 7 && meshNode.GlobalTransform == moved,
+			"visibility, layer and subpixel transform changes reach Godot");
+		var secondNode = new MeshInstance3D(); AddChild(secondNode);
+		RenderQuality.Visible(secondNode, true); RenderQuality.Layers(secondNode, 3);
+		Check(secondNode.Visible && secondNode.Layers == 3, "render state never crosses node instances");
+		Check(RenderQuality.Antialiasing(false, 120) == Viewport.Msaa.Msaa2X &&
+			RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Disabled &&
+			RenderQuality.Antialiasing(true, 120) == Viewport.Msaa.Disabled,
+			"2x AA releases cost on fallback and respects original graphics");
+		FramePacing.SetTargetFps(120, "AA test");
+		RenderQuality.ResetBudget();
+		var skeleton = new Skeleton3D(); AddChild(skeleton); skeleton.AddBone("root"); skeleton.AddBone("child");
+        long beforeBone = RenderQuality.Submitted;
+        for (int f = 0; f < 1000; f++) RenderQuality.BoneScale(skeleton, 0, Vector3.One);
+        Check(RenderQuality.Submitted - beforeBone == 1 && skeleton.GetBonePoseScale(0) == Vector3.One,
+            "unchanged animation bone scales submit once, not every frame");
+        RenderQuality.BoneScale(skeleton, 0, new Vector3(2, 3, 4));
+        RenderQuality.BoneScale(skeleton, 1, Vector3.One);
+        Check(skeleton.GetBonePoseScale(0) == new Vector3(2, 3, 4) && skeleton.GetBonePoseScale(1) == Vector3.One,
+            "animated bone scale changes and different bones remain independent");
+        skeleton.QueueFree();
+        var viewport = new SubViewport(); AddChild(viewport);
+		RenderQuality.Size(viewport, new Vector2I(320, 240));
+		var submittedSize = RenderQuality.Submitted;
+		RenderQuality.Size(viewport, new Vector2I(320, 240));
+		Check(viewport.Size == new Vector2I(320, 240) && RenderQuality.Submitted == submittedSize,
+			"unchanged viewport size and AA avoid native writes");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Size == new Vector2I(640, 360), "viewport still resizes on orientation or resolution change");
+		Check(RenderQuality.ReduceCostBeforeFallback(), "AA cost is removed before sacrificing selected FPS");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Msaa3D == Viewport.Msaa.Disabled && FramePacing.EffectiveFps == 120 &&
+			!RenderQuality.ReduceCostBeforeFallback(), "AA downshift retains 120 and happens only once per level");
+		RenderQuality.ResetBudget();
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X, "new level can restore edge smoothing");
+		meshNode.QueueFree(); secondNode.QueueFree(); viewport.QueueFree();
+
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;

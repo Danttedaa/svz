@@ -56,6 +56,7 @@ namespace Svz
 		public static void Init(Node root, Action<string> notify)
 		{
 			sRoot = root;
+			RenderQuality.ResetBudget();
 			if (sCaptureQueued) RenderingServer.FramePostDraw -= CaptureDiagnosticFrame;
 			sCaptureQueued = false;
 			sCapturePath = null;
@@ -96,19 +97,29 @@ namespace Svz
 			if (sRoot == null) return;
 			if (Settings.FallbackEnabled && !sFallenBack && sMonitor.Feed(delta))
 			{
-				// Capture the panel rate and measured load BEFORE switching to fallback:
-				// after the switch, the overlay would otherwise report only stable 60Hz.
-				sFallbackReport = string.Format(CultureInfo.InvariantCulture,
-					"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
-					sMonitor.LastWindow, DisplayHz);
-				sFallenBack = true;
-				Log("fallback reason: " + sFallbackReport);
-				Apply("fallback");
-				sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
+				// Remove optional GPU work and retry the selected target once before
+				// lowering the frame-rate target.
+				if (RenderQuality.ReduceCostBeforeFallback())
+				{
+					sMonitor.Retarget(Settings.TargetFps);
+					Log("load: disabled 2x MSAA; retrying selected FPS before fallback");
+				}
+				else
+				{
+					// Capture the panel rate and measured load BEFORE switching to fallback.
+					sFallbackReport = string.Format(CultureInfo.InvariantCulture,
+						"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
+						sMonitor.LastWindow, DisplayHz);
+					sFallenBack = true;
+					Log("fallback reason: " + sFallbackReport);
+					Apply("fallback");
+					sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
+				}
 			}
 			if (sRecheckIn > 0 && (sRecheckIn -= delta) <= 0) Recheck("after request");
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
-			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
+			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz))
+			{ Log(sStats.Last); Log(RenderQuality.Diagnostics()); }
 			UpdateOverlay(delta);
 			if (sCaptureRemaining > 0 && (sCaptureRemaining -= delta) <= 0)
 			{
@@ -161,6 +172,7 @@ namespace Svz
 		/// overload does not cause repeated 120/60 Hz switching.
 		public static void OnLevelLoaded()
 		{
+			RenderQuality.ResetBudget();
 			if (!sFallenBack || sRoot == null)
 			{
 				sMonitor?.Reset(); // ignore loading hitches during an ordinary level change
@@ -390,6 +402,9 @@ namespace Svz
 			// immediately before fallback. Shown only when the FPS overlay is enabled.
 			if (sFallenBack && !string.IsNullOrEmpty(sFallbackReport))
 				sOverlay.Text += "\nFallback " + sFallbackReport;
+            sOverlay.Text += string.Format(CultureInfo.InvariantCulture,
+                "\nCPU {0:0.0} ms  render sync {1:0.0} ms  AA {2}",
+                RenderQuality.LastFrameMs, RenderQuality.LastRenderMs, RenderQuality.AaStatus);
 		}
 
 		private static void Log(string msg) => GD.Print("[svz-fps] " + msg);

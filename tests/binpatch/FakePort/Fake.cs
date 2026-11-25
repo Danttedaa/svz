@@ -231,12 +231,29 @@ namespace Svz
 		}
 	}
 
+    public static class Skinning
+    {
+        public static void Sync(Skeleton3D skeleton, int bone, Vector3 scale) => skeleton.SetBonePoseScale(bone, scale);
+    }
+
 	public static class Render
 	{
 		public static int Hidden;
+        public static void Sync() { }
+        public static SubViewport TestViewport;
+        private static void SyncCameras() { TestViewport.Size = new Vector2I(640, 360); }
 		private static void SyncRenderer(object r)
 		{
 			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;
+            if (r is not MeshInstance3D node) return;
+            if (Hidden < 0) { node.Visible = false; return; }
+            node.Visible = true;
+            node.Layers = 3;
+            node.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            if (Hidden == 0) node.GlobalTransform = Transform3D.Identity;
+            else if (Hidden == 1) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.One);
+            else if (Hidden == 2) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Up);
+            else node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Right);
 		}
 	}
 }

@@ -21,7 +21,7 @@ mkdir -p "$out"
 fail=(); warn=(); note() { echo "$*" >> "$out/details.txt"; }
 : > "$out/details.txt"
 # managed errors that mean a patched call site or the enhancement assembly does not work on Android Mono
-bad='FATAL EXCEPTION|Could not load file or assembly|Failed to load assembly|MissingMethodException|MissingFieldException|TypeLoadException|MethodAccessException|FieldAccessException|InvalidProgramException|BadImageFormatException|VerificationException'
+bad='FATAL EXCEPTION|Could not load file or assembly|Failed to load assembly|MissingMethodException|MissingFieldException|TypeLoadException|MethodAccessException|FieldAccessException|InvalidProgramException|BadImageFormatException|VerificationException|SceneShaderGLES3: Program linking failed|CanvasShaderGLES3: Program linking failed|shader failed to compile, unable to bind shader'
 
 check_errors() {   # stage logfile
   if grep -qE "$bad" "$2"; then

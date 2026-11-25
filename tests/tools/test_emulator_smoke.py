@@ -20,7 +20,7 @@ case "$*" in
   'shell monkey '*) echo 'launcher output'; [ "$MODE" != launcher ] ;;
   'shell pidof '*) [ "$MODE" != died ] && echo 1234 ;;
   'shell dumpsys activity exit-info '*) echo 'process exit reason: test crash' ;;
-  'logcat -d') printf '[svz-fps] settings: target=120\\n[svz] data: 4373 files\\n' ;;
+  'logcat -d') printf '[svz-fps] settings: target=120\\n[svz] data: 4373 files\\n'; [ \"$MODE\" != shader ] || echo 'CanvasShaderGLES3: Program linking failed:' ;;
   *) exit 0 ;;
 esac
 ''')
@@ -56,6 +56,12 @@ esac
         self.assertIn('launcher failed', files['smoke.txt'])
         self.assertIn('launcher output', files['launch-start.txt'])
         self.assertIn('test crash', files['exit-start.txt'])
+
+    def test_shader_link_failure_fails_even_with_live_process(self):
+        result, files = self.run_smoke('shader')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('CanvasShaderGLES3: Program linking failed', files['smoke.txt'])
+        self.assertNotIn('store: could not build', files['smoke.txt'])
 
     def test_dead_process_preserves_exit_reason(self):
         result, files = self.run_smoke('died')

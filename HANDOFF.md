@@ -1,3 +1,20 @@
+# Renderer blocker identified: 2026-11-25
+
+Build 41 / run 45630730319 / artifact 15031318728 proves the blank images
+are actual blank Godot frames (sampledColors=1), not Android overlays. Both
+SceneShaderGLES3 and CanvasShaderGLES3 fail linking with:
+`Fragment shader active uniforms exceed GL_MAX_FRAGMENT_UNIFORM_VECTORS (261)`.
+The active renderer is the old emulator SwiftShader 4.0.0.1 GLES translator.
+Android window focus is the game, no obscuring window, power Awake.
+
+M28 changes the private emulator GPU from deprecated `swiftshader_indirect`
+to `swangle` (SwiftShader through ANGLE). No phone-renderer or font changes.
+Shader-link failures now explicitly fail smoke even if the app stays alive.
+Next: inspect the new private diagnostics artifact; require real Store images
+before evaluating native 768 versus original-HD 1536. Build 41 remains unverified.
+
+---
+
 # Current continuation: 2026-11-25
 
 Branch: `enhanced/m27-native-font-baseline`. Preserve original designs, 120 FPS

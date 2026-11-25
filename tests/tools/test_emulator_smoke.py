@@ -18,6 +18,7 @@ echo "$*" >> "$ADB_TRACE"
 case "$*" in
   'shell getprop sys.boot_completed') [ "$MODE" = boot ] && echo 0 || echo 1 ;;
   'shell getprop ro.product.cpu.abilist') echo x86_64 ;;
+  'shell am wait-for-broadcast-idle') [ \"$MODE\" != broadcasts ] ;;
   'shell monkey '*) echo 'launcher output'; [ "$MODE" != launcher ] ;;
   'shell pidof '*) [ "$MODE" != died ] && echo 1234 ;;
   'shell dumpsys activity exit-info '*) echo 'process exit reason: test crash' ;;
@@ -73,6 +74,20 @@ esac
         self.assertLess(calls.index('settings put system accelerometer_rotation 0'), launch)
         self.assertLess(calls.index('settings put system user_rotation 1'), launch)
         self.assertLess(calls.index('shell wm size 720x1280'), launch)
+
+    def test_install_broadcasts_settle_before_launch(self):
+        _, files = self.run_smoke('variants')
+        calls = files['adb-calls.txt']
+        self.assertLess(calls.index('install -r --no-incremental'),
+                        calls.index('shell am wait-for-broadcast-idle'))
+        self.assertLess(calls.index('shell am wait-for-broadcast-idle'),
+                        calls.index('shell monkey'))
+
+    def test_unsettled_broadcasts_fail_without_launch(self):
+        result, files = self.run_smoke('broadcasts')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('package broadcasts did not settle', files['smoke.txt'])
+        self.assertNotIn('shell monkey', files['adb-calls.txt'])
 
     def test_dead_process_preserves_exit_reason(self):
         result, files = self.run_smoke('died')

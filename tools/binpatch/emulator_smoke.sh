@@ -58,6 +58,12 @@ capture_failure() {   # stage: preserve the reason for process death, including 
 
 launch_app() {   # stage: do not discard launcher failures
   local stage="$1"
+  # Install returns before package-added/configuration broadcasts are delivered.
+  # Launching Godot during those broadcasts can recreate and terminate its activity.
+  if ! timeout 90 adb shell am wait-for-broadcast-idle > "$out/ready-$stage.txt" 2>&1; then
+    fail+=("$stage: Android package broadcasts did not settle (see ready-$stage.txt)")
+    return 1
+  fi
   if ! adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > "$out/launch-$stage.txt" 2>&1; then
     fail+=("$stage: launcher failed (see launch-$stage.txt)")
     capture_failure "$stage"

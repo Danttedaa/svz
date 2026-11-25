@@ -307,13 +307,20 @@ namespace Svz
 			return null;
 		}
 
-		/// OS.GetVersion() is Build.VERSION.RELEASE on Android ("17", "11", "8.1.0").
-		private static int AndroidApiLevel()
+		// Godot reports the Android SDK level plus an optional incremental build
+		// suffix, not the marketed Android release. Treat unknown/custom-ROM
+		// strings conservatively instead of inventing an API level.
+		private static int AndroidApiLevel() => ParseAndroidSdkVersion(OS.GetVersion());
+
+		public static int ParseAndroidSdkVersion(string version)
 		{
-			string v = OS.GetVersion();
-			int dot = v.IndexOf('.');
-			if (!int.TryParse(dot >= 0 ? v.Substring(0, dot) : v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int major)) return 0;
-			return AndroidApiForRelease(major);
+			if (string.IsNullOrWhiteSpace(version)) return 0;
+			string value = version.Trim();
+			int end = 0;
+			while (end < value.Length && value[end] >= '0' && value[end] <= '9') end++;
+			if (end == 0 || (end < value.Length && value[end] != '.' && !char.IsWhiteSpace(value[end]))) return 0;
+			return int.TryParse(value.AsSpan(0, end), NumberStyles.None,
+				CultureInfo.InvariantCulture, out int sdk) && sdk > 0 ? sdk : 0;
 		}
 
 		/// Lowest API level of an Android major release (11 -> 30, 12 -> 31, ...); releases after 12L add one level each.

@@ -194,6 +194,18 @@ public partial class Test : Node
 
 		Check(FramePacing.AndroidApiForRelease(17) == 37 && FramePacing.AndroidApiForRelease(11) == 30, "Android API mapping");
 
+		Check(FramePacing.ParseAndroidSdkVersion("34") == 34,
+			"Godot SDK 34 is not remapped to API 54");
+		Check(FramePacing.ParseAndroidSdkVersion("37.123456") == 37 &&
+			FramePacing.ParseAndroidSdkVersion(" 30 build ") == 30,
+			"SDK parser accepts incremental-build suffixes");
+		Check(FramePacing.ParseAndroidSdkVersion("30") == 30 &&
+			FramePacing.ParseAndroidSdkVersion("31") == 31,
+			"Surface overload boundary preserves API 30 and 31");
+		foreach (var version in new string[] { null, "", "LineageOS 21", "-1", "0", "34preview", "99999999999999" })
+			Check(FramePacing.ParseAndroidSdkVersion(version) == 0,
+				"unknown SDK version is conservative: " + (version ?? "<null>"));
+
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;

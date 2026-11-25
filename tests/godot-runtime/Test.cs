@@ -206,6 +206,32 @@ public partial class Test : Node
 			Check(FramePacing.ParseAndroidSdkVersion(version) == 0,
 				"unknown SDK version is conservative: " + (version ?? "<null>"));
 
+		// Font coverage must ignore black/colored atlas RGB, retain material tint,
+		// and preserve every alpha value (including antialiasing and invisible text).
+		var fontPixels = new byte[256 * 4];
+		for (int a = 0; a < 256; a++) {
+			fontPixels[a * 4] = (byte)a;
+			fontPixels[a * 4 + 1] = (byte)(255 - a);
+			fontPixels[a * 4 + 2] = 17;
+			fontPixels[a * 4 + 3] = (byte)a;
+		}
+		var originalPixels = (byte[])fontPixels.Clone();
+		var coverage = FontTextureCoverage.AlphaOnly(fontPixels, 256);
+		bool allCoverage = coverage.Length == 512, unchanged = true;
+		for (int a = 0; a < 256; a++)
+			allCoverage &= coverage[a * 2] == 255 && coverage[a * 2 + 1] == a;
+		for (int i = 0; i < fontPixels.Length; i++) unchanged &= fontPixels[i] == originalPixels[i];
+		Check(allCoverage, "font shader discards atlas RGB and preserves all 256 alpha levels");
+		Check(unchanged, "font shader does not mutate the original atlas");
+		var blackAtlas = FontTextureCoverage.AlphaOnly(new byte[] { 0, 0, 0, 255 }, 1);
+		Check(blackAtlas[0] == 255 && blackAtlas[1] == 255,
+			"black RGB atlas can render white foreground and colored labels");
+		Check(blackAtlas[0] * 0 == 0, "black shadow material remains black");
+		bool badCoverage = false;
+		try { FontTextureCoverage.AlphaOnly(new byte[3], 1); }
+		catch (System.ArgumentException) { badCoverage = true; }
+		Check(badCoverage, "invalid coverage dimensions fail before texture allocation");
+
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;

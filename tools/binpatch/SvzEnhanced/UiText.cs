@@ -52,6 +52,7 @@ namespace Svz
 		/// Replaces CanvasItem.DrawTextureRectRegion in GuiCanvas.DrawText (same arguments, `self` first).
 		public static void DrawGlyph(CanvasItem self, Texture2D texture, Rect2 rect, Rect2 srcRect, Color? modulate, bool transpose, bool clipUv)
 		{
+			texture = FontTextureCoverage.ForFont(texture);
 			if (!sHaloPass)
 			{
 				// Source is the ORIGINAL font atlas. This optional A/B mode

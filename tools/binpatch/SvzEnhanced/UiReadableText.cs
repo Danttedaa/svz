@@ -6,8 +6,8 @@ namespace Svz
 {
     /// <summary>
     /// Optional native-Godot renderer for SMALL GUIText labels. It is deliberately
-    /// independent of the old bitmap glyph atlas: the alpha silhouette itself is
-    /// distressed in the original game, and a solid-color copy does not fix that.
+    /// independent of the bitmap glyph atlas. Original bitmap rendering uses
+    /// FontTextureCoverage to preserve the original alpha-only shader semantics.
     /// All original layout measurements and strings are read from the existing
     /// object, and the original DrawText is used on any unsupported input/error.
     /// </summary>

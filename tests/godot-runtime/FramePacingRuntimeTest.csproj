@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="../../godot/src/Engine/Core/FramePacing.cs" Link="FramePacing.cs" />
     <Compile Include="../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
+    <Compile Include="../../godot/src/Engine/Render/FontTextureCoverage.cs" Link="FontTextureCoverage.cs" />
   </ItemGroup>
 </Project>

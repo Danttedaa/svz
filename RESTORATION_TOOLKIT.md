@@ -79,3 +79,18 @@ with actual images; test a crowded battle, deaths and rewards; verify pause/resu
 and an update retaining the save; measure the cap on the target phone. Separately
 resolve or explicitly scope the legacy OnGUI screens and Pachinko verification.
 The historical build notes do not establish these results for the latest commit.
+
+## Original font coverage
+
+`FontTextureCoverage` restores Unity GUI/Text semantics: atlas alpha supplies
+coverage, while the label material supplies color. Exported Alpha8 atlases can
+have black RGB with clean alpha. Multiplying that RGB makes both white foreground
+and black shadow black, producing doubled, tangled lettering. This is a rendering
+error, not evidence that the original glyph silhouette needs replacement.
+
+Normalize font-only textures to white luminance and unchanged alpha once per
+atlas. Both source and assembly-patched draw paths share the helper. Sprites,
+glyph geometry, text layout and gesture policy are unchanged. Runtime tests cover
+all 256 alpha values, source immutability and foreground/shadow tint behavior.
+The Store was rendered locally with the pinned port and Godot 4.7.2; Android
+verification and device acceptance remain separate requirements.

@@ -39,8 +39,16 @@ What `tools/build.sh` does:
 
 ## Automatic builds (GitHub Actions)
 
-`.github/workflows/build.yml` builds Android (arm64 + x86_64), Windows x86_64, Linux x86_64/arm64 and
-macOS (universal) on every push to `main` and publishes them as the `latest` release; pushing a `v*` tag makes a versioned release. Repository secrets:
+Game-containing builds are restricted to a private repository. This public repository
+contains enhancement source and tests; it must not publish game assets or game APKs.
+The standalone frame-rate probe contains no game data.
+
+For SvZ Enhanced, the private build uses a pinned input APK and engine commit,
+verifies the signature, patches the assemblies, signs the result, and runs Android
+emulator checks. See [the private build guide](ci/private/README.md).
+Failed emulator runs produce unverified prereleases, not accepted updates.
+
+The original source-build route supports the following private-repository secrets:
 
 - `SVZ_APK_URL`: link to your original APK (direct link, or a Google Drive "anyone with the link" share link)
 - `SVZ_KEYSTORE_B64` (optional): `base64 -w0 keys/svz.jks`, keeps Android updates installable over your current install
@@ -68,7 +76,14 @@ Generated / local only (git-ignored): `godot/src/Game`, `godot/src/UnityEngine`,
 
 ## Status
 
-Menus, story movie, shop, gameplay and legacy particle effects work. Missing: `OnGUI` screens; Pachinko is untested.
+The port runs menus, the story movie, shop, gameplay and legacy particles.
+Enhanced work adds a 120 FPS ceiling, frame pacing, victory timing and crowd fixes.
+Text readability and final Android regression acceptance are still being verified;
+a successful compile or log message is not visual acceptance. Legacy `OnGUI`
+screens remain missing and Pachinko remains unverified.
+
+See [HANDOFF.md](HANDOFF.md) for dated evidence and
+[the restoration toolkit](RESTORATION_TOOLKIT.md) for reusable SvZ2 components.
 
 ## License
 

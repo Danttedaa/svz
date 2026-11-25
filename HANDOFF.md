@@ -1,3 +1,32 @@
+# Latest acceptance work: 2026-11-25
+
+Draft PR: https://github.com/Danttedaa/svz/pull/25
+
+Engine code `6d9980eca17bc8ba1b066059dafc07d7dcdd5322` passed the hosted
+Tests workflow (run 45647488346): Python/tool checks, 42 pacing policy assertions,
+10090 corpse cases, 70 font assertions, 9 snapshot checks, Godot runtime/bridge/
+restart tests, and 18 patched-behavior checks. Android acceptance is separate.
+
+Build 42 failed during Android activity recreation. Its log shows OnPause,
+OnStop, engine destruction, reuse of an initialized fragment and force quit;
+this is not evidence of a managed game-code exception. The next smoke version
+sets a stable landscape orientation and display size before first launch, and
+stops the activity before subsequent size changes. Fresh-install diagnostic
+stages run independently while retaining all prior failures.
+
+The coding executor became unavailable during this continuation. GitHub changes
+and hosted checks remain usable. The private repository now has a
+`Review emulator diagnostics` workflow that exposes image previews only inside
+private job logs after each build. It downloads only the private smoke artifact;
+it neither executes artifact contents nor handles APKs or signing keys.
+
+Completion must not be claimed yet: valid native/HD text images, a nonzero
+crowded-battle/death workload, target-phone acceptance and the legacy OnGUI/
+Pachinko scope still need resolution. See RESTORATION_TOOLKIT.md for reusable
+components and verification boundaries.
+
+---
+
 # Renderer blocker identified: 2026-11-25
 
 Build 41 / run 45630730319 / artifact 15031318728 proves the blank images

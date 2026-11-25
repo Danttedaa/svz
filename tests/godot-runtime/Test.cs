@@ -115,6 +115,18 @@ public partial class Test : Node
         Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = false });
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         Check(!GameSettings.IsOpen, "Escape closes the paused audio modal through its real shortcut");
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        bool quitBeforeBack = GetTree().QuitOnGoBack;
+        GameSettings.Open();
+        GameSettings.OnNotification((int)Node.NotificationWMGoBackRequest);
+        Check(!GetTree().QuitOnGoBack, "Back notification cannot re-enable automatic quit before Window emits its signal");
+        // Match Window's native order: propagate notification, then emit signal.
+        GetWindow().EmitSignal(Window.SignalName.GoBackRequested);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen && GetTree().QuitOnGoBack == quitBeforeBack,
+            "native Back signal does not quit and restores the prior back policy after the event");
+        GD.Print("[settings-ui] completed including native Back signal");
         Godot.Input.EmulateMouseFromTouch = previousEmulation;
         Finish();
     }
@@ -446,8 +458,8 @@ public partial class Test : Node
             GameSettings.BlockGameInput(new InputEventScreenTouch { Pressed = true }),
             "settings pause gameplay, block game touches and consume Android Back");
         GameSettings.OnNotification((int)Node.NotificationWMGoBackRequest);
-        Check(!GetTree().Paused && !GameSettings.IsOpen && GetTree().QuitOnGoBack == previousBack,
-            "Back closes settings and restores the previous game state");
+        Check(!GetTree().Paused && !GameSettings.IsOpen && !GetTree().QuitOnGoBack,
+            "Back closes settings and keeps automatic quit blocked until the event finishes");
         GetTree().Paused = true; GameSettings.Open(); GameSettings.Close();
         Check(GetTree().Paused, "closing settings preserves a previously paused tree"); GetTree().Paused = false;
         Check(GameSettings.BlockGameInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false }),

@@ -24,6 +24,8 @@ namespace Svz
         private static Label SaveStatus;
         private static Action ClearInput;
         private static double Scale = 1;
+        private static bool BackRestorePending;
+        private static int BackRestoreToken;
 
         public static double ClampVolume(double value, double fallback = 100) =>
             double.IsFinite(value) ? Math.Clamp(value, 0, 100) : fallback;
@@ -194,7 +196,9 @@ namespace Svz
         {
             if (Root == null || IsOpen) return;
             EntryWasVisible = PauseEntry.Visible; ClearInput?.Invoke();
-            WasPaused = Root.GetTree().Paused; WasQuitOnBack = Root.GetTree().QuitOnGoBack;
+            WasPaused = Root.GetTree().Paused;
+            if (!BackRestorePending) WasQuitOnBack = Root.GetTree().QuitOnGoBack;
+            BackRestorePending = false; BackRestoreToken++;
             Root.GetTree().QuitOnGoBack = false;
             IsOpen = true; Modal.Visible = true; PauseEntry.Visible = false;
             Root.GetTree().Paused = true;
@@ -204,7 +208,14 @@ namespace Svz
             if (!IsOpen) return;
             if (Save() != Error.Ok) return;
             ClearInput?.Invoke(); IgnoreClosingReleases = true; IsOpen = false; Modal.Visible = false;
-            Root.GetTree().QuitOnGoBack = WasQuitOnBack; Root.GetTree().Paused = WasPaused;
+            Root.GetTree().Paused = WasPaused;
+            // Window propagates Back notifications before emitting go_back_requested.
+            // Restoring this flag inside that notification would let SceneTree quit.
+            int token = ++BackRestoreToken; BackRestorePending = true;
+            Callable.From(() => {
+                if (token != BackRestoreToken || IsOpen || !GodotObject.IsInstanceValid(Root)) return;
+                Root.GetTree().QuitOnGoBack = WasQuitOnBack; BackRestorePending = false;
+            }).CallDeferred();
             PauseEntry.Visible = EntryWasVisible;
         }
         public static void OnNotification(int what)

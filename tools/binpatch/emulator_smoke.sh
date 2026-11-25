@@ -14,7 +14,7 @@
 # Stages 2-4 need the game's debug command line (--level=N). Godot ignores command-line extras sent to its
 # exported launcher activity, so these stages install emulator-only VARIANTS of the APK whose packaged
 # command line (assets/_cl_) has the arguments appended, signed with a throwaway key (smoke_variant.py).
-# The published APK is not changed. If a variant cannot be built, the stage is WARN (not exercised).
+# The published APK is not changed. All stages are required; unavailable variants fail verification.
 set -uo pipefail
 apk="$1"; pkg="$2"; out="$3"; wait_s="${4:-60}"
 mkdir -p "$out"
@@ -50,19 +50,34 @@ make_variant() {   # stage args... -> prints the signed variant path
   echo "$signed"
 }
 
+capture_failure() {   # stage: preserve the reason for process death, including native crashes
+  adb shell dumpsys window > "$out/window-$1.txt" 2>&1
+  adb shell dumpsys activity exit-info "$pkg" > "$out/exit-$1.txt" 2>&1
+  cat "$out/exit-$1.txt"
+}
+
+launch_app() {   # stage: do not discard launcher failures
+  local stage="$1"
+  if ! adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > "$out/launch-$stage.txt" 2>&1; then
+    fail+=("$stage: launcher failed (see launch-$stage.txt)")
+    capture_failure "$stage"
+    return 1
+  fi
+}
+
 launch_level() {   # stage level seconds args...
   local stage="$1" level="$2" secs="$3"; shift 3
   local log="$out/logcat-$stage.txt" variant
   if ! variant=$(make_variant "$stage" "$@"); then
-    warn+=("$stage: could not build the emulator test variant, stage not exercised"); return 1
+    fail+=("$stage: could not build the required emulator test variant"); return 1
   fi
   adb uninstall "$pkg" > /dev/null 2>&1
   if ! adb install -r --no-incremental "$variant" > "$out/install-$stage.txt" 2>&1; then
-    warn+=("$stage: test variant did not install: $(tail -1 "$out/install-$stage.txt")"); rm -f "$variant"; return 1
+    fail+=("$stage: test variant did not install: $(tail -1 "$out/install-$stage.txt")"); rm -f "$variant"; return 1
   fi
   rm -f "$variant"
   adb logcat -c
-  adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+  launch_app "$stage" || return 1
   sleep "$secs"
   local pid; pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot-$stage.png" 2>/dev/null || rm -f "$out/screenshot-$stage.png"
@@ -76,13 +91,16 @@ launch_level() {   # stage level seconds args...
     fi
   fi
   adb logcat -d > "$log"
-  [ -n "$pid" ] || fail+=("$stage: app not running after ${secs}s")
+  if [ -z "$pid" ]; then
+    fail+=("$stage: app not running after ${secs}s")
+    capture_failure "$stage"
+  fi
   check_errors "$stage" "$log"
   if grep -q "\[svz\] loading level $level " "$log"; then
     note "$stage: level $level loaded"
     return 0
   fi
-  warn+=("$stage: level $level was not opened, stage not exercised")
+  fail+=("$stage: required level $level was not opened")
   return 1
 }
 
@@ -92,6 +110,10 @@ for ((i=0; i<90; i++)); do
   [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && break
   sleep 2
 done
+if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" != 1 ]; then
+  echo "FAIL: Android framework did not finish booting" | tee "$out/smoke.txt"
+  exit 1
+fi
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
 adb shell svc power stayon true
@@ -103,16 +125,14 @@ if ! adb install -r --no-incremental "$apk" > "$out/install.txt" 2>&1; then
 else
   # stage 1: normal start
   adb logcat -c
-  adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+  launch_app start || true
   sleep "$wait_s"
   pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot.png" 2>/dev/null || rm -f "$out/screenshot.png"
   adb logcat -d > "$out/logcat.txt"
   if [ -z "$pid" ]; then
     fail+=("app not running after ${wait_s}s")
-    adb shell dumpsys window > "$out/window-start.txt" 2>&1
-    adb shell dumpsys activity exit-info "$pkg" > "$out/exit-start.txt" 2>&1
-    cat "$out/exit-start.txt"
+    capture_failure start
   fi
   grep -q "\[svz-fps\] settings:" "$out/logcat.txt" || fail+=("no [svz-fps] start line (SvzEnhanced.dll not loaded?)")
   grep -q "\[svz\] data:" "$out/logcat.txt" || fail+=("game data did not load ([svz] data: line missing)")

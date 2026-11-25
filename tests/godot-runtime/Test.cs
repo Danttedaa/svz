@@ -450,6 +450,9 @@ public partial class Test : Node
         var sound = new AudioStreamWav();
         GameSettings.SetStream(musicPlayer, sound, "BGM_Level_Summer_Night_01");
         Check(musicPlayer.Bus.ToString() == GameSettings.MusicBus, "music players use the music bus");
+        var moviePlayer = new VideoStreamPlayer(); AddChild(moviePlayer); GameSettings.RouteVideo(moviePlayer);
+        Check(moviePlayer.Bus.ToString() == GameSettings.MasterBus, "master volume and mute include cutscene audio");
+        moviePlayer.QueueFree();
         GameSettings.SetEffectStream(musicPlayer, sound);
         Check(musicPlayer.Bus.ToString() == GameSettings.EffectsBus, "reused one-shot players return to the effects bus");
         bool previousBack = GetTree().QuitOnGoBack;

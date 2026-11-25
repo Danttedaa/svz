@@ -123,6 +123,7 @@ namespace Svz
             if (!music && !LoggedEffects) { LoggedEffects = true; GD.Print("[svz-settings] effects routed to separate bus"); }
         }
         public static void SetEffectStream(AudioStreamPlayer player, AudioStream stream) => SetStream(player, stream, null);
+        public static void RouteVideo(VideoStreamPlayer player) { EnsureBuses(); player.Bus = MasterBus; }
 
         private static Label Label(string text, int size = 24)
         {

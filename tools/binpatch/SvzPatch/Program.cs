@@ -910,6 +910,15 @@ internal static class Program
 			setter[0].Operand = Hook(type == "UnityEngine.AudioSource" ? "SetStream" : "SetEffectStream", module.TypeSystem.Void, parameters.ToArray());
 			target.Body.OptimizeMacros();
 		}
+        var movie = module.GetType("Svz.Movie");
+        var videoPlays = movie.Methods.Where(m => m.HasBody).SelectMany(m => m.Body.Instructions
+            .Where(i => Calls(i, "Godot.VideoStreamPlayer", "Play")).Select(i => (method: m, call: i))).ToList();
+        Require(videoPlays.Count == 1, "one video playback site");
+        var videoPlay = (MethodReference)videoPlays[0].call.Operand;
+        Require(videoPlay.HasThis && videoPlay.Parameters.Count == 0, "video Play() signature");
+        var vi = videoPlays[0].method.Body.GetILProcessor();
+        vi.InsertBefore(videoPlays[0].call, vi.Create(OpCodes.Dup));
+        vi.InsertBefore(videoPlays[0].call, vi.Create(OpCodes.Call, Hook("RouteVideo", module.TypeSystem.Void, videoPlay.DeclaringType)));
 		Require(AudioSettingsPatched(module), "settings entry points and audio routing installed");
 	}
 	private static bool AudioSettingsPatched(ModuleDefinition module) =>

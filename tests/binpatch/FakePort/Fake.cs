@@ -31,7 +31,7 @@ namespace Svz
 	using Mathf = UnityEngine.Mathf;
 
 	public static class Toast { public static void Show(string text) { GD.Print(text); } }
-	public static class Movie { public static bool Playing => false; public static void Update() { } }
+	public static class Movie { public static bool Playing => false; public static void Update() { } public static void Play(VideoStreamPlayer player) { player.Play(); } }
 
 	public partial class Main : Node
 	{

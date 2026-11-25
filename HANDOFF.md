@@ -16,9 +16,10 @@ Audio is routed through an owned master bus with separate Music/Effects children
 leaving legacy AudioListener bus gain/mute and per-source fades intact. Exported
 music clips use the BGM_ prefix; looping enemy ambience remains Effects. Settings
 are stored in user://svz_audio.cfg, independently of profile/progress saves.
+Cutscene audio also routes through the owned master bus.
 Zero volume mutes its bus exactly; corrupt and out-of-range preferences recover.
 
-Validation: full suite passes: 71 primary Godot runtime checks, eleven real-touch/keyboard
+Validation: full suite passes: 72 primary Godot runtime checks, eleven real-touch/keyboard
 UI interaction checks, two checks in a separate process for persistence, the
 existing bridge/restart checks, and 19 patched-behavior checks including held and
 pending input reset. The exact pinned port passes the new IL patch and helper

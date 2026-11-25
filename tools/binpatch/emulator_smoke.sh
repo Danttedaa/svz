@@ -87,6 +87,14 @@ launch_level() {   # stage level seconds args...
 }
 
 adb wait-for-device
+# Wait for Android framework boot, not merely the ADB transport.
+for ((i=0; i<90; i++)); do
+  [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && break
+  sleep 2
+done
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
+adb shell svc power stayon true
 # Acknowledge Android immersive-mode education on the disposable CI emulator.
 adb shell settings put secure immersive_mode_confirmations confirmed >/dev/null 2>&1 || warn+=("could not acknowledge emulator fullscreen education")
 abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r'); note "emulator ABIs: $abi"
@@ -100,7 +108,12 @@ else
   pid=$(adb shell pidof "$pkg" | tr -d '\r')
   adb exec-out screencap -p > "$out/screenshot.png" 2>/dev/null || rm -f "$out/screenshot.png"
   adb logcat -d > "$out/logcat.txt"
-  [ -n "$pid" ] || fail+=("app not running after ${wait_s}s")
+  if [ -z "$pid" ]; then
+    fail+=("app not running after ${wait_s}s")
+    adb shell dumpsys window > "$out/window-start.txt" 2>&1
+    adb shell dumpsys activity exit-info "$pkg" > "$out/exit-start.txt" 2>&1
+    cat "$out/exit-start.txt"
+  fi
   grep -q "\[svz-fps\] settings:" "$out/logcat.txt" || fail+=("no [svz-fps] start line (SvzEnhanced.dll not loaded?)")
   grep -q "\[svz\] data:" "$out/logcat.txt" || fail+=("game data did not load ([svz] data: line missing)")
   check_errors start "$out/logcat.txt"

@@ -125,6 +125,12 @@ fi
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
 adb shell svc power stayon true
+# Stabilize the disposable emulator before Godot creates its surface. Rotating
+# an active Godot activity can destroy the engine during Android recreation.
+adb shell settings put system accelerometer_rotation 0
+adb shell settings put system user_rotation 1
+adb shell wm size 720x1280
+sleep 3
 # Acknowledge Android immersive-mode education on the disposable CI emulator.
 adb shell settings put secure immersive_mode_confirmations confirmed >/dev/null 2>&1 || warn+=("could not acknowledge emulator fullscreen education")
 abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r'); note "emulator ABIs: $abi"
@@ -147,7 +153,9 @@ else
   check_errors start "$out/logcat.txt"
   grep "\[svz-fps\]\|\[svz\] data:\|\[svz\] level" "$out/logcat.txt" | sed 's/^.*\(\[svz\)/\1/' | head -20 >> "$out/details.txt"
 
-  if [ "${#fail[@]}" -eq 0 ]; then
+  # Run independent fresh-install stages even if the intro failed. Keep every
+  # recorded failure: later diagnostics must never turn a failed build into PASS.
+  {
     # stage 2: Store (fonts + contrast halo)
     if launch_level store 3 45 --level=3; then
       if grep -q "\[svz-ui\] text scale .*mode original, contrast off" "$out/logcat-store.txt"; then
@@ -163,6 +171,7 @@ else
     # 1536-selected). The CI emulator normally exposes just 320 game pixels
     # and a 256x256 legacy font; it CANNOT exercise the HD-only filter.
     # Android's native display is portrait, while the game is landscape.
+    adb shell am force-stop "$pkg"
     note "store-hd: display before override $(adb shell wm size | tr -d '\r')"
     if adb shell wm size 720x1280 >/dev/null 2>&1; then
       note "store-hd: display override $(adb shell wm size | tr -d '\r')"
@@ -195,6 +204,7 @@ else
     else
       fail+=("store-native: baseline not exercised")
     fi
+    adb shell am force-stop "$pkg"
     adb shell wm size reset >/dev/null 2>&1 || warn+=("store-hd: could not restore emulator display size")
     # stage 4: battle (skinning, animation, deaths); --killall kills every enemy after 25 s
     if launch_level battle 2 60 --level=2 --killall=30; then
@@ -202,7 +212,7 @@ else
       grep -o "\[svz-fps\] stats.*" "$out/logcat-battle.txt" | tail -1 | sed 's/^/battle: /' >> "$out/details.txt"
       grep -o "\[svz-death\].*" "$out/logcat-battle.txt" | head -3 | sed 's/^/battle: /' >> "$out/details.txt"
     fi
-  fi
+  }
 fi
 
 {

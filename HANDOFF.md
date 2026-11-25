@@ -1,3 +1,29 @@
+# Bone pose performance continuation: 2026-11-25
+
+Phone build 1047: 102 FPS with 2x AA in the reported busy battle; deliberate
+cheap-troop stress tests fell back after about 74 FPS with AA off. Stress scenes
+are explicitly beyond the user's usual troop load. CPU totals in those captures
+were 8.7-10.8 ms, with render sync 4.3-5.8 ms. These are different scenes and
+cannot establish an exact improvement ratio or minimum instantaneous FPS.
+
+Next pass replaces separate per-bone position/scale/rotation submissions with
+one `Skeleton3D.SetBonePose` call, caching exact duplicate poses by skeleton and
+bone index. Bone data/animation frequency and character designs are retained.
+The original transform remains passed by reference to avoid an extra managed
+copy. The IL patch checks the decomposition shape and refuses unexpected branch
+entries or exception boundaries before replacing that block.
+
+Validation: full suite passed, including 55 Godot runtime checks and 18 patched
+behavior checks. Pose equivalence covers rotations, nonuniform scales, reflected
+and sheared bases, unchanged poses and subpixel movement. Local headless benchmark
+of 20,000 changing bone updates (five runs, warmed, median) measured previous
+path 15.45 ms versus single-call path 3.39 ms. This is a bone-update microbenchmark,
+not a whole-game or phone speedup. The exact pinned real port passes patch checks
+and helper resolution, and renders an animated game world through MainMenu.
+The next private APK and target-phone performance acceptance remain required.
+
+---
+
 # Graphics and performance continuation: 2026-11-25
 
 Accepted phone baseline: engine `3ed660b7aef8962c87f629d6e795cca1f8ea514d`

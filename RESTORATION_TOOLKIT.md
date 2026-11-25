@@ -112,3 +112,17 @@ For real game-world comparisons, launch MainMenu (`--level=1`) and tap Start
 (`--tap=3:0.5:0.74`) rather than jumping directly into InGame. Require an actual
 nonzero combat workload before claiming battle performance. Local software
 rasterization and Store FPS cannot establish phone GPU performance.
+
+## Single-call bone poses
+
+The original skinning bridge sends position, scale and rotation separately and
+decomposes each transform in managed code. `RenderQuality.BonePose` submits the
+whole transform with `Skeleton3D.SetBonePose`, allowing one native decomposition.
+Exact duplicate transforms are skipped; moving bones keep the full animation
+update rate. Cache ownership remains the skeleton instance and bone index.
+
+Verify pose equivalence against the old path for rotation, nonuniform scale,
+reflection and shear, plus tiny movements and duplicate frames. The assembly
+adapter verifies the original contiguous decomposition and branch boundaries.
+Benchmark changing poses against the previous scale-cached path; do not equate
+a bone-update microbenchmark speedup with a whole-game FPS gain.

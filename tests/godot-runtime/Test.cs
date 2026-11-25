@@ -269,6 +269,57 @@ public partial class Test : Node
         RenderQuality.BoneScale(skeleton, 1, Vector3.One);
         Check(skeleton.GetBonePoseScale(0) == new Vector3(2, 3, 4) && skeleton.GetBonePoseScale(1) == Vector3.One,
             "animated bone scale changes and different bones remain independent");
+        var poseSkeleton = new Skeleton3D(); AddChild(poseSkeleton); poseSkeleton.AddBone("pose");
+        var poseCases = new[] {
+            Transform3D.Identity,
+            new Transform3D(Basis.FromEuler(new Vector3(0.3f, -0.9f, 1.2f)).Scaled(new Vector3(2, 3, 4)), new Vector3(2, 4, -8)),
+            new Transform3D(Basis.FromEuler(new Vector3(1.2f, 0.4f, -0.7f)).Scaled(new Vector3(-2, 3, 4)), Vector3.One),
+            new Transform3D(new Basis(new Vector3(1, 0.1f, 0.2f), new Vector3(0, 2, 0.1f), new Vector3(0.1f, 0, 3)), Vector3.Zero)
+        };
+        foreach (var input in poseCases)
+        {
+            var pose = input;
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            skeleton.SetBonePoseScale(0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+            RenderQuality.BonePose(poseSkeleton, 0, ref pose);
+            Check(poseSkeleton.GetBonePose(0).IsEqualApprox(skeleton.GetBonePose(0)),
+                "single-call pose matches original decomposition including nonuniform scale, reflection and shear");
+        }
+        long beforePose = RenderQuality.Submitted;
+        var samePose = poseCases[3];
+        for (int f = 0; f < 1000; f++) RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        Check(RenderQuality.Submitted == beforePose, "unchanged bone poses skip all native submissions");
+        samePose.Origin += new Vector3(0.00001f, 0, 0);
+        RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        Check(poseSkeleton.GetBonePosePosition(0) == samePose.Origin, "subpixel animated bone movement survives pose caching");
+        // Comparative interop benchmark; report measurements, never use a flaky
+        // wall-clock threshold as a correctness test. Both loops animate poses.
+        var samples = new Transform3D[256];
+        for (int i = 0; i < samples.Length; i++) samples[i] = new Transform3D(
+            Basis.FromEuler(new Vector3(i * 0.01f, i * 0.02f, -i * 0.01f)), new Vector3(i * 0.1f, 1, 2));
+        var oldTimes = new List<double>(); var newTimes = new List<double>();
+        void OldBone(int i)
+        {
+            var pose = samples[i & 255];
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            RenderQuality.BoneScale(skeleton, 0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+        }
+        void NewBone(int i) { var pose = samples[i & 255]; RenderQuality.BonePose(poseSkeleton, 0, ref pose); }
+        for (int i = 0; i < 2000; i++) { OldBone(i); NewBone(i); }
+        for (int run = 0; run < 5; run++)
+        {
+            ulong started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) OldBone(i);
+            oldTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+            started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) NewBone(i);
+            newTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+        }
+        oldTimes.Sort(); newTimes.Sort();
+        GD.Print(System.FormattableString.Invariant($"[benchmark] 20000 animated bones median: old={oldTimes[2]:0.00}ms new={newTimes[2]:0.00}ms"));
+        poseSkeleton.QueueFree();
         skeleton.QueueFree();
         var viewport = new SubViewport(); AddChild(viewport);
 		RenderQuality.Size(viewport, new Vector2I(320, 240));

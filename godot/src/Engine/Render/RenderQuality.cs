@@ -18,6 +18,7 @@ namespace Svz
             public Transform3D Transform;
             public Vector2I Size;
             public Dictionary<int, Vector3> BoneScales;
+            public Dictionary<int, Transform3D> BonePoses;
             public Viewport.Msaa Aa = (Viewport.Msaa)(-1);
         }
         private static readonly ConditionalWeakTable<GodotObject, State> States = new();
@@ -85,6 +86,16 @@ namespace Svz
             if (s.BoneScales.TryGetValue(bone, out var previous) && previous == value)
             { Skipped++; return; }
             skeleton.SetBonePoseScale(bone, value); s.BoneScales[bone] = value; Submitted++;
+        }
+        public static void BonePose(Skeleton3D skeleton, int bone, ref Transform3D value)
+        {
+            var s = States.GetOrCreateValue(skeleton);
+            s.BonePoses ??= new Dictionary<int, Transform3D>();
+            if (s.BonePoses.TryGetValue(bone, out var previous) && previous == value)
+            { Skipped++; return; }
+            // Godot decomposes the pose in one native call instead of separate
+            // position/scale/rotation interop calls and managed decomposition.
+            skeleton.SetBonePose(bone, value); s.BonePoses[bone] = value; Submitted++;
         }
         public static Viewport.Msaa Antialiasing(bool original, int effectiveFps) =>
             original || effectiveFps < 120 ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa2X;

@@ -233,7 +233,14 @@ namespace Svz
 
     public static class Skinning
     {
-        public static void Sync(Skeleton3D skeleton, int bone, Vector3 scale) => skeleton.SetBonePoseScale(bone, scale);
+        public static void Sync(Skeleton3D skeleton, int bone, Transform3D value)
+        {
+            skeleton.SetBonePosePosition(bone, value.Origin);
+            var basis = value.Basis;
+            var scale = basis.Scale;
+            skeleton.SetBonePoseScale(bone, scale);
+            skeleton.SetBonePoseRotation(bone, basis.Orthonormalized().GetRotationQuaternion());
+        }
     }
 
 	public static class Render

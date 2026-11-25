@@ -835,14 +835,7 @@ internal static class Program
 		setSize.Parameters.Add(new ParameterDefinition(oldSize.DeclaringType));
 		setSize.Parameters.Add(new ParameterDefinition(oldSize.Parameters[0].ParameterType));
 		size[0].OpCode = OpCodes.Call; size[0].Operand = setSize;
-		var scales = Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Where(i =>
-            Calls(i, "Godot.Skeleton3D", "SetBonePoseScale")).ToList();
-        Require(scales.Count == 1, "one skinning bone-scale submission site");
-        var scaleMethod = (MethodReference)scales[0].Operand;
-        var scaleHook = new MethodReference("BoneScale", module.TypeSystem.Void, helper) { HasThis = false };
-        scaleHook.Parameters.Add(new ParameterDefinition(scaleMethod.DeclaringType));
-        foreach (var parameter in scaleMethod.Parameters) scaleHook.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
-        scales[0].OpCode = OpCodes.Call; scales[0].Operand = scaleHook;
+        PatchBonePose(module, helper);
         TimeMethod(Method(module, "Svz.Render", "Sync", 0), "BeginRender", "EndRender");
 		TimeMethod(Method(module, "Svz.Main", "_Process", 1), "BeginFrame", "EndFrame");
 		Require(RenderQualityPatched(module), "render-quality hooks installed");
@@ -867,7 +860,47 @@ internal static class Program
 		Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Count(i =>
 			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.RenderQuality" && r.DeclaringType.Scope.Name == Enh) == 8 &&
 		Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "Size")) &&
-        Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "BoneScale"));
+        Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "BonePose"));
+
+	private static void PatchBonePose(ModuleDefinition module, TypeReference helper)
+	{
+		var method = Method(module, "Svz.Skinning", "Sync", 3);
+		method.Body.SimplifyMacros();
+		var instructions = method.Body.Instructions;
+		var position = instructions.Where(i => Calls(i, "Godot.Skeleton3D", "SetBonePosePosition")).ToList();
+		var rotation = instructions.Where(i => Calls(i, "Godot.Skeleton3D", "SetBonePoseRotation")).ToList();
+		Require(position.Count == 1 && rotation.Count == 1, "one bone position/rotation submission site");
+		var origin = position[0].Previous;
+		Require(Calls(origin, "Godot.Transform3D", "get_Origin") ||
+            (origin.OpCode == OpCodes.Ldfld && origin.Operand is FieldReference field &&
+                field.DeclaringType.FullName == "Godot.Transform3D" && field.Name == "Origin"),
+            "position comes from pose origin");
+		var poseLoad = origin.Previous;
+        Require(poseLoad.OpCode == OpCodes.Ldloca || poseLoad.OpCode == OpCodes.Ldarga ||
+            poseLoad.OpCode == OpCodes.Ldloc || poseLoad.OpCode == OpCodes.Ldarg,
+            "bone pose loaded immediately before origin");
+        if (poseLoad.OpCode == OpCodes.Ldloc) poseLoad.OpCode = OpCodes.Ldloca;
+        if (poseLoad.OpCode == OpCodes.Ldarg) poseLoad.OpCode = OpCodes.Ldarga;
+		int from = instructions.IndexOf(origin), to = instructions.IndexOf(rotation[0]);
+		Require(from >= 3 && to > from, "contiguous bone decomposition block");
+		var block = instructions.Skip(from).Take(to - from + 1).ToHashSet();
+		Require(block.Count(i => Calls(i, "Godot.Skeleton3D", "SetBonePoseScale")) == 1 &&
+			block.Count(i => Calls(i, "Godot.Basis", "Orthonormalized")) == 1 &&
+			block.Count(i => Calls(i, "Godot.Basis", "GetRotationQuaternion")) == 1,
+			"bone decomposition uses original scale and orthonormalized rotation");
+		Require(!instructions.Any(i => (i.Operand is Instruction target && block.Contains(target)) ||
+			(i.Operand is Instruction[] targets && targets.Any(block.Contains))), "no branch enters bone decomposition");
+		Require(method.Body.ExceptionHandlers.Count == 0, "skinning has no exception boundaries to move");
+		var old = (MethodReference)position[0].Operand;
+		var hook = new MethodReference("BonePose", module.TypeSystem.Void, helper) { HasThis = false };
+		hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+		hook.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		hook.Parameters.Add(new ParameterDefinition(new ByReferenceType(origin.Operand is FieldReference originField ? originField.DeclaringType : ((MethodReference)origin.Operand).DeclaringType)));
+		var il = method.Body.GetILProcessor();
+		il.InsertBefore(origin, il.Create(OpCodes.Call, hook));
+		foreach (var instruction in block) il.Remove(instruction);
+		method.Body.OptimizeMacros();
+	}
 
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.

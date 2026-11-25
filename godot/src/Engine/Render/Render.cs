@@ -765,11 +765,7 @@ namespace Svz
 				var b = smr.__bones[i];
 				if (b == null || b.__destroyed) continue;
 				var t = Render.M(b.localToWorldMatrix);
-				sk.SetBonePosePosition(i, t.Origin);
-				var basis = t.Basis;
-				var scale = basis.Scale;
-				RenderQuality.BoneScale(sk, i, scale);
-				sk.SetBonePoseRotation(i, basis.Orthonormalized().GetRotationQuaternion());
+				RenderQuality.BonePose(sk, i, ref t);
 			}
 		}
 	}

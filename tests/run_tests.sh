@@ -56,6 +56,10 @@ echo "stats line present: $(grep -m1 '\[svz-fps\] stats' <<<"$out")"
 grep '\[svz-fps\] stats' <<<"$out" | python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import device_check as d; \
   s, _ = d.parse_game_log(sys.stdin.read()); assert s and s[0]['target'] == 120, s; print('device_check parses it:', s[0])" "$here/../tools/verify"
 
+echo "== audio settings touch interaction and process restart"
+"$godot_bin" --headless --path "$rt" -- --phase=settings-ui
+"$godot_bin" --headless --path "$rt" -- --phase=settings-restart
+
 echo "== Android refresh-rate bridge against stand-in Java objects"
 "$godot_bin" --headless --path "$rt" -- --phase=bridge
 

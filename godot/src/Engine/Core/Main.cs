@@ -103,6 +103,7 @@ namespace Svz
 
 		public override void _Input(InputEvent e)
 		{
+			if (GameSettings.BlockGameInput(e)) return;
 			if (Movie.Playing) { Movie.OnInput(e); return; }
 			InputState.Feed(e);
 		}
@@ -169,6 +170,7 @@ namespace Svz
 			InputState.BeginFrame();
 			SceneManager.ProcessPending();
 			Runtime.RunStarts();
+            if (Application.loadedLevelName == "Options") GameSettings.ShowOptionsEntry();
 
 			while (Time.__fixedTime + Time.__fixedDt <= Time.__time)
 			{
@@ -222,6 +224,7 @@ namespace Svz
 
 		public static void Request(int level, bool additive)
 		{
+			GameSettings.SceneChanging();
 			Pending = level;
 			sAdditive = additive;
 		}
@@ -274,6 +277,15 @@ namespace Svz
 		public static bool AnyKeyDown => sKeysDown.Count > 0 || sMouseDown.Any(b => b);
 
 		private static UnityEngine.Vector2 ToUnity(Godot.Vector2 p) => new UnityEngine.Vector2(p.X, Display.Height - p.Y);
+
+        public static void ResetForSettings()
+        {
+            sFingers.Clear(); Touches.Clear();
+            foreach (var array in new[] { sMouse, sMouseDown, sMouseUp, sMousePending, sMouseDownPending, sMouseUpPending })
+                System.Array.Clear(array, 0, array.Length);
+            sKeys.Clear(); sKeysDown.Clear(); sKeysUp.Clear(); sKeysDownPending.Clear(); sKeysUpPending.Clear();
+            InputString = sPendingString = "";
+        }
 
 		public static void Feed(InputEvent e)
 		{

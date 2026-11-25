@@ -111,6 +111,24 @@ static class Program
 			!ReferenceEquals(verts, meshT.GetField("__v", F).GetValue(secondMesh)),
 			"different particle renderers never share mutable buffers");
 
+        var inputType = port.GetType("Svz.InputState");
+        foreach (var field in inputType.GetFields(F).Where(f => f.IsStatic))
+        {
+            var value = field.GetValue(null);
+            if (value is bool[] bits) System.Array.Fill(bits, true);
+            else if (value is string) field.SetValue(null, "held");
+            else if (value is System.Collections.IDictionary dictionary) dictionary.Add(1, 2);
+            else if (value is System.Collections.IList list) list.Add(1);
+            else value.GetType().GetMethod("Add").Invoke(value, new object[] { 1 });
+        }
+        inputType.GetMethod("ResetForSettings").Invoke(null, null);
+        Check(inputType.GetFields(F).Where(f => f.IsStatic).All(f => {
+            var value = f.GetValue(null);
+            if (value is bool[] bits) return bits.All(b => !b);
+            if (value is string text) return text == "";
+            return (int)value.GetType().GetProperty("Count").GetValue(value) == 0;
+        }), "settings clear held, pending and released game input without touching saves");
+
 		Console.WriteLine($"[test] {passed} patched-behaviour checks passed");
 		return 0;
 	}

@@ -126,3 +126,19 @@ reflection and shear, plus tiny movements and duplicate frames. The assembly
 adapter verifies the original contiguous decomposition and branch boundaries.
 Benchmark changing poses against the previous scale-cached path; do not equate
 a bone-update microbenchmark speedup with a whole-game FPS gain.
+
+## Audio settings and modal input
+
+`GameSettings` owns a three-bus audio hierarchy beneath the existing Master bus,
+so user gains multiply source fades without changing legacy listener state.
+Classify known BGM_ clips as music, not all looping sources: combat ambience can
+loop too. Route reused one-shot players back to Effects. Save audio preferences
+separately from progress and recover malformed values conservatively.
+
+The current production adapter adds an Audio settings entry to OptionsImpl and a
+Settings entry to PauseMenu; do not remove the original Options links. Modal
+open/close clears both current and pending Unity input, preserves prior tree pause
+and Back handling, and leaves the native controls active while gameplay pauses.
+For a full-source game build, wire PauseMenu construction/destruction to
+ShowPauseEntry(true/false); source and patched audio playback use the same bus
+helpers. No graphics settings are part of this pass, per the owner's request.

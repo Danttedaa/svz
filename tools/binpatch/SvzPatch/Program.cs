@@ -256,6 +256,7 @@ internal static class Program
 		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
 		PatchTextHalo(module, uiTextRef);
 		PatchNativeSmallText(module, new TypeReference("Svz", "UiReadableText", module, asmRef));
+		PatchAudioSettings(module, new TypeReference("Svz", "GameSettings", module, asmRef));
 		PatchRenderQuality(module, new TypeReference("Svz", "RenderQuality", module, asmRef));
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
@@ -808,6 +809,115 @@ internal static class Program
 				i.Operand is TypeReference t && t.FullName == "System.Int32");
 	}
 
+	private static void PatchAudioSettings(ModuleDefinition module, TypeReference helper)
+	{
+		MethodReference Hook(string name, TypeReference returns, params TypeReference[] parameters)
+		{
+			var method = new MethodReference(name, returns, helper) { HasThis = false };
+			foreach (var parameter in parameters) method.Parameters.Add(new ParameterDefinition(parameter));
+			return method;
+		}
+		var input = Method(module, "Svz.Main", "_Input", 1);
+		input.Body.SimplifyMacros();
+		var il = input.Body.GetILProcessor(); var first = input.Body.Instructions[0];
+		il.InsertBefore(first, il.Create(OpCodes.Ldarg_1));
+		il.InsertBefore(first, il.Create(OpCodes.Call, Hook("BlockGameInput", module.TypeSystem.Boolean, input.Parameters[0].ParameterType)));
+		il.InsertBefore(first, il.Create(OpCodes.Brfalse, first));
+		il.InsertBefore(first, il.Create(OpCodes.Ret)); input.Body.OptimizeMacros();
+
+		void AtReturns(MethodDefinition target, string hook, bool? flag = null)
+		{
+			target.Body.SimplifyMacros(); var processor = target.Body.GetILProcessor();
+			foreach (var ret in target.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+			{
+				if (flag.HasValue) { ret.OpCode = flag.Value ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0; ret.Operand = null;
+					var call = processor.Create(OpCodes.Call, Hook(hook, module.TypeSystem.Void, module.TypeSystem.Boolean));
+					processor.InsertAfter(ret, call); processor.InsertAfter(call, processor.Create(OpCodes.Ret)); }
+				else { ret.OpCode = OpCodes.Call; ret.Operand = Hook(hook, module.TypeSystem.Void);
+					processor.InsertAfter(ret, processor.Create(OpCodes.Ret)); }
+			}
+			target.Body.OptimizeMacros();
+		}
+		AtReturns(Method(module, "OptionsImpl", "Start", 0), "ShowOptionsEntry");
+        var optionsType = module.GetType("OptionsImpl");
+        var optionsUpdate = Method(module, "OptionsImpl", "Update", 0);
+        var about = optionsType.Fields.Single(f => f.Name == "mAboutDialog");
+        var confirm = optionsType.Fields.Single(f => f.Name == "mConfirmDialog");
+        optionsUpdate.Body.SimplifyMacros(); var oi = optionsUpdate.Body.GetILProcessor();
+        foreach (var ret in optionsUpdate.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+        {
+            ret.OpCode = OpCodes.Ldarg_0; ret.Operand = null;
+            var additions = new[] { oi.Create(OpCodes.Ldfld, about), oi.Create(OpCodes.Ldnull), oi.Create(OpCodes.Ceq),
+                oi.Create(OpCodes.Ldarg_0), oi.Create(OpCodes.Ldfld, confirm), oi.Create(OpCodes.Ldnull), oi.Create(OpCodes.Ceq),
+                oi.Create(OpCodes.And), oi.Create(OpCodes.Call, Hook("UpdateOptionsAvailability", module.TypeSystem.Void, module.TypeSystem.Boolean)), oi.Create(OpCodes.Ret) };
+            var previous = ret; foreach (var addition in additions) { oi.InsertAfter(previous, addition); previous = addition; }
+        }
+        optionsUpdate.Body.OptimizeMacros();
+        var request = Method(module, "Svz.SceneManager", "Request", 2);
+        request.Body.GetILProcessor().InsertBefore(request.Body.Instructions[0],
+            Instruction.Create(OpCodes.Call, Hook("SceneChanging", module.TypeSystem.Void)));
+		AtReturns(Method(module, "PauseMenu", ".ctor", 0), "ShowPauseEntry", true);
+		AtReturns(Method(module, "PauseMenu", "Destroy", 0), "ShowPauseEntry", false);
+
+		// Reset every current and pending input collection when the modal opens or closes.
+		var state = module.GetType("Svz.InputState") ?? throw new PatchException("InputState missing");
+		Require(!state.Methods.Any(m => m.Name == "ResetForSettings"), "input reset must be installed only once");
+		var reset = new MethodDefinition("ResetForSettings", MethodAttributes.Public | MethodAttributes.Static, module.TypeSystem.Void);
+		state.Methods.Add(reset); var ri = reset.Body.GetILProcessor();
+		string[] collections = { "sFingers", "Touches", "sKeys", "sKeysDown", "sKeysUp", "sKeysDownPending", "sKeysUpPending" };
+		foreach (var name in collections)
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic);
+			Require(field != null, "input collection " + name);
+			ri.Append(ri.Create(OpCodes.Ldsfld, field));
+			ri.Append(ri.Create(OpCodes.Callvirt, new MethodReference("Clear", module.TypeSystem.Void, field.FieldType) { HasThis = true }));
+		}
+		var array = new TypeReference("System", "Array", module, module.TypeSystem.CoreLibrary);
+		var clear = new MethodReference("Clear", module.TypeSystem.Void, array) { HasThis = false };
+		clear.Parameters.Add(new ParameterDefinition(array)); clear.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		clear.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		foreach (var name in new[] { "sMouse", "sMouseDown", "sMouseUp", "sMousePending", "sMouseDownPending", "sMouseUpPending" })
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic && f.FieldType.FullName == "System.Boolean[]");
+			Require(field != null, "input mouse array " + name);
+			ri.Append(ri.Create(OpCodes.Ldsfld, field)); ri.Append(ri.Create(OpCodes.Ldc_I4_0));
+			ri.Append(ri.Create(OpCodes.Ldsfld, field)); ri.Append(ri.Create(OpCodes.Ldlen)); ri.Append(ri.Create(OpCodes.Conv_I4)); ri.Append(ri.Create(OpCodes.Call, clear));
+		}
+		foreach (var name in new[] { "InputString", "sPendingString" })
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic && f.FieldType.FullName == "System.String");
+			Require(field != null, "input string " + name); ri.Append(ri.Create(OpCodes.Ldstr, "")); ri.Append(ri.Create(OpCodes.Stsfld, field));
+		}
+		ri.Append(ri.Create(OpCodes.Ret));
+
+		var source = module.GetType("UnityEngine.AudioSource");
+		var clip = source.Fields.Single(f => f.Name == "__clip");
+		var getName = module.ImportReference(Method(module, "UnityEngine.Object", "get_name", 0));
+		foreach (var (type, name, count) in new[] { ("UnityEngine.AudioSource", "Play", 1), ("Svz.AudioSystem", "OneShot", 3) })
+		{
+			var target = Method(module, type, name, count); target.Body.SimplifyMacros();
+			var setter = target.Body.Instructions.Where(i => Calls(i, "Godot.AudioStreamPlayer", "set_Stream")).ToList();
+			Require(setter.Count == 1, "one audio stream assignment in " + type + "." + name);
+			var old = (MethodReference)setter[0].Operand;
+			var parameters = new System.Collections.Generic.List<TypeReference> { old.DeclaringType, old.Parameters[0].ParameterType };
+			if (type == "UnityEngine.AudioSource")
+			{
+				var pi = target.Body.GetILProcessor(); pi.InsertBefore(setter[0], pi.Create(OpCodes.Ldarg_0));
+				pi.InsertBefore(setter[0], pi.Create(OpCodes.Ldfld, clip)); pi.InsertBefore(setter[0], pi.Create(OpCodes.Callvirt, getName));
+				parameters.Add(module.TypeSystem.String);
+			}
+			setter[0].OpCode = OpCodes.Call;
+			setter[0].Operand = Hook(type == "UnityEngine.AudioSource" ? "SetStream" : "SetEffectStream", module.TypeSystem.Void, parameters.ToArray());
+			target.Body.OptimizeMacros();
+		}
+		Require(AudioSettingsPatched(module), "settings entry points and audio routing installed");
+	}
+	private static bool AudioSettingsPatched(ModuleDefinition module) =>
+		Method(module, "OptionsImpl", "Start", 0).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "ShowOptionsEntry")) &&
+		Method(module, "Svz.Main", "_Input", 1).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "BlockGameInput")) &&
+		Method(module, "UnityEngine.AudioSource", "Play", 1).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "SetStream")) &&
+		Method(module, "Svz.AudioSystem", "OneShot", 3).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "SetEffectStream"));
+
 	private static readonly Dictionary<string, string> RenderSetters = new()
 	{
 		["set_Visible"] = "Visible", ["set_Layers"] = "Layers",
@@ -1028,6 +1138,7 @@ internal static class Program
 			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("small labels can bypass distressed bitmap font with a native fallback", NativeSmallTextPatched(m)),
+			("audio settings menu, modal input reset and split music/effect buses", AudioSettingsPatched(m)),
 			("render state skips unchanged native writes and cameras use adaptive AA", RenderQualityPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),

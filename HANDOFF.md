@@ -1,3 +1,34 @@
+# Audio settings continuation: 2026-11-26
+
+User requested a settings section, then explicitly deferred graphics settings
+until graphics enhancement is done. This pass adds AUDIO ONLY: master volume,
+music volume, sound effects volume and mute. No graphics/FPS controls were added.
+
+The existing Options screen gains an Audio settings button; About, Credits,
+Privacy and the original Back button remain. The pause menu gains Settings.
+Closing the modal returns to that same screen/pause menu. The native overlay
+scales with the viewport, pauses the scene tree and preserves any previous pause
+state. Android Back and Escape close it. Current and pending game input is cleared
+on open/close so touches cannot leak into movement or menu actions.
+
+Audio is routed through an owned master bus with separate Music/Effects children,
+leaving legacy AudioListener bus gain/mute and per-source fades intact. Exported
+music clips use the BGM_ prefix; looping enemy ambience remains Effects. Settings
+are stored in user://svz_audio.cfg, independently of profile/progress saves.
+Zero volume mutes its bus exactly; corrupt and out-of-range preferences recover.
+
+Validation: full suite passes: 71 primary Godot runtime checks, nine real-touch/keyboard
+UI interaction checks, two checks in a separate process for persistence, the
+existing bridge/restart checks, and 19 patched-behavior checks including held and
+pending input reset. The exact pinned port passes the new IL patch and helper
+resolution. A real Options render confirms the new entry fits without covering
+existing buttons. Native panel preview is legible; target-phone verification
+remains necessary. The settings entry lifecycle is patched into OptionsImpl and
+PauseMenu for the production binary route. Full-source integrations must also
+wire the PauseMenu entry's show/hide calls to the generated game class.
+
+---
+
 # Bone pose performance continuation: 2026-11-25
 
 Phone build 1047: 102 FPS with 2x AA in the reported busy battle; deliberate

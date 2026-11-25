@@ -43,6 +43,8 @@ public partial class Test : Node
 		switch (Phase())
 		{
 			case "main": MainChecks(); return;
+            case "settings-ui": SettingsUiChecks(); return;
+            case "settings-restart": SettingsRestart(); return;
 			case "restart-1": Restart1(); break;
 			case "restart-2": Restart2(); break;
 			case "restart-3": Restart3(); break;
@@ -51,6 +53,71 @@ public partial class Test : Node
 		}
 		Finish();
 	}
+
+    private void SettingsRestart()
+    {
+        FramePacing.Init(this, _ => { });
+        Check(GameSettings.Master >= 20 && GameSettings.Master <= 30 && GameSettings.Muted,
+            "touch-selected volume and mute survive a separate app process");
+        Check(AudioServer.IsBusMute(AudioServer.GetBusIndex(GameSettings.MasterBus)),
+            "persisted mute is applied to the real audio bus on startup");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); Finish();
+    }
+    private async void SettingsUiChecks()
+    {
+        DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GameSettings.ConfigPath));
+        FramePacing.Init(this, _ => { });
+        bool previousEmulation = Godot.Input.EmulateMouseFromTouch;
+        Godot.Input.EmulateMouseFromTouch = true;
+        GameSettings.ShowOptionsEntry();
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        var layer = GetNode("AudioSettings");
+        var entry = (Button)layer.FindChild("AudioEntry", true, false);
+        GameSettings.UpdateOptionsAvailability(false);
+        Check(!entry.Visible, "audio entry hides behind legacy About and confirmation dialogs");
+        GameSettings.UpdateOptionsAvailability(true);
+        Check(entry.Visible, "audio entry returns after legacy dialogs close");
+        var entryPoint = entry.GetGlobalTransformWithCanvas() * (entry.Size / 2);
+        Check(GameSettings.BlockGameInput(new InputEventScreenTouch { Position = entryPoint, Pressed = true }),
+            "native settings entry touch is excluded from game input");
+        Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Position = entryPoint, Pressed = true });
+        Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Position = entryPoint, Pressed = false });
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.IsOpen && GetTree().Paused, "real touch on the Options entry opens audio settings");
+        // Container minimum sizes are resolved after the opening input event.
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        var slider = (HSlider)layer.FindChild("MasterVolume", true, false);
+        void TouchAt(Control control, float fraction)
+        {
+            var point = control.GetGlobalTransformWithCanvas() * new Vector2(control.Size.X * fraction, control.Size.Y / 2);
+            Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Pressed = true, Position = point });
+            Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Pressed = false, Position = point });
+        }
+        TouchAt(slider, 0.25f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.Master >= 20 && GameSettings.Master <= 30,
+            "real touch events move the audio slider while gameplay is paused");
+        var mute = (CheckButton)layer.FindChild("AudioMute", true, false); TouchAt(mute, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.Muted && AudioServer.IsBusMute(AudioServer.GetBusIndex(GameSettings.MasterBus)),
+            "real touch toggles mute and changes the actual audio bus");
+        var done = (Button)layer.FindChild("AudioDone", true, false); TouchAt(done, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen && !GetTree().Paused, "touch Done closes the modal and resumes gameplay");
+        GameSettings.ShowPauseEntry(true);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        TouchAt(entry, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.IsOpen && entry.Text == "Settings", "pause-menu entry also opens settings through real touch");
+        Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+        Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = false });
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen, "Escape closes the paused audio modal through its real shortcut");
+        Godot.Input.EmulateMouseFromTouch = previousEmulation;
+        Finish();
+    }
 
 	// Restart regression: each phase is a separate Godot process, so nothing survives in static state.
 	// 1: fresh install -> external configuration changes 60 FPS and the readout.
@@ -338,6 +405,55 @@ public partial class Test : Node
 		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X, "new level can restore edge smoothing");
 		meshNode.QueueFree(); secondNode.QueueFree(); viewport.QueueFree();
 
+
+        DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GameSettings.ConfigPath));
+        GameSettings.Load();
+        Check(GameSettings.Master == 100 && GameSettings.Music == 100 && GameSettings.Effects == 100 && !GameSettings.Muted,
+            "fresh audio preferences preserve original volume");
+        Check(GameSettings.IsMusic("BGM_Level_Winter_Night_01") && !GameSettings.IsMusic("Enemy_Taiko_Ambience_LP_01"),
+            "actual BGM naming routes music separately from looping combat effects");
+        int masterBus = AudioServer.GetBusIndex(GameSettings.MasterBus), musicBus = AudioServer.GetBusIndex(GameSettings.MusicBus), effectsBus = AudioServer.GetBusIndex(GameSettings.EffectsBus);
+        float oldGlobalVolume = AudioServer.GetBusVolumeDb(0); bool oldGlobalMute = AudioServer.IsBusMute(0);
+        GameSettings.SetAudio(40, 0, 25, false);
+        Check(AudioServer.IsBusMute(musicBus) && !AudioServer.IsBusMute(effectsBus) &&
+            Mathf.IsEqualApprox(AudioServer.GetBusVolumeDb(effectsBus), Mathf.LinearToDb(0.25f)),
+            "music zero mutes exactly while sound-effect gain remains independent");
+        Check(AudioServer.GetBusSend(musicBus).ToString() == GameSettings.MasterBus &&
+            AudioServer.GetBusSend(effectsBus).ToString() == GameSettings.MasterBus &&
+            AudioServer.GetBusVolumeDb(0) == oldGlobalVolume && AudioServer.IsBusMute(0) == oldGlobalMute,
+            "own audio hierarchy preserves the legacy listener and pause state");
+        GameSettings.SetAudio(40, 70, 25, true);
+        Check(AudioServer.IsBusMute(masterBus), "master mute preserves slider volumes");
+        Check(GameSettings.Save() == Error.Ok, "audio settings save successfully");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Load();
+        Check(GameSettings.Master == 40 && GameSettings.Music == 70 && GameSettings.Effects == 25 && GameSettings.Muted,
+            "saved audio preferences reload independently of gameplay saves");
+        Check(GameSettings.ClampVolume(double.NaN) == 100 && GameSettings.ClampVolume(double.PositiveInfinity) == 100 &&
+            GameSettings.ClampVolume(-4) == 0 && GameSettings.ClampVolume(120) == 100,
+            "audio preferences reject nonfinite numbers and clamp out-of-range input");
+        var malformedAudio = new ConfigFile(); malformedAudio.SetValue("audio", "music", "invalid");
+        malformedAudio.SetValue("audio", "master", -12); malformedAudio.Save(GameSettings.ConfigPath); GameSettings.Load();
+        Check(GameSettings.Music == 100 && GameSettings.Master == 0, "malformed saved audio values recover safely");
+        var musicPlayer = new AudioStreamPlayer(); AddChild(musicPlayer);
+        var sound = new AudioStreamWav();
+        GameSettings.SetStream(musicPlayer, sound, "BGM_Level_Summer_Night_01");
+        Check(musicPlayer.Bus.ToString() == GameSettings.MusicBus, "music players use the music bus");
+        GameSettings.SetEffectStream(musicPlayer, sound);
+        Check(musicPlayer.Bus.ToString() == GameSettings.EffectsBus, "reused one-shot players return to the effects bus");
+        bool previousBack = GetTree().QuitOnGoBack;
+        GameSettings.Open();
+        Check(GetTree().Paused && GameSettings.IsOpen && !GetTree().QuitOnGoBack &&
+            GameSettings.BlockGameInput(new InputEventScreenTouch { Pressed = true }),
+            "settings pause gameplay, block game touches and consume Android Back");
+        GameSettings.OnNotification((int)Node.NotificationWMGoBackRequest);
+        Check(!GetTree().Paused && !GameSettings.IsOpen && GetTree().QuitOnGoBack == previousBack,
+            "Back closes settings and restores the previous game state");
+        GetTree().Paused = true; GameSettings.Open(); GameSettings.Close();
+        Check(GetTree().Paused, "closing settings preserves a previously paused tree"); GetTree().Paused = false;
+        Check(GameSettings.BlockGameInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false }),
+            "closing emulated mouse release cannot activate a legacy button underneath Done");
+        Check(!GameSettings.BlockGameInput(new InputEventScreenTouch { Position = Vector2.Zero, Pressed = true }), "closed settings accept fresh ordinary game touches");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); musicPlayer.QueueFree();
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;

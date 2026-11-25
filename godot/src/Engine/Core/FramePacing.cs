@@ -80,6 +80,7 @@ namespace Svz
 			Log($"settings: target={Settings.TargetFps} fallback={(Settings.FallbackEnabled ? Settings.FallbackFps.ToString(CultureInfo.InvariantCulture) : "off")} requestDisplayRate={Settings.RequestDisplayRate}");
 			Apply("init");
 			SetOverlay(Settings.ShowFps);
+			GameSettings.Init(root);
 		}
 
 		/// Unity's Application.targetFrameRate setter lands here. The player's setting wins; the
@@ -190,6 +191,7 @@ namespace Svz
 		/// Main._Notification forwards every notification here (used by the binary patch, tools/binpatch).
 		public static void OnNotification(int what)
 		{
+			GameSettings.OnNotification(what);
 			if (what == (int)MainLoop.NotificationApplicationResumed) OnResume();
 		}
 

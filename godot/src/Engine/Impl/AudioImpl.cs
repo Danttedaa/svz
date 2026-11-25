@@ -99,7 +99,7 @@ namespace UnityEngine
 			var s = __clip?.__Stream;
 			if (s == null) return;
 			var p = Player;
-			p.Stream = AudioSystem.Looping(s, __loop);
+			GameSettings.SetStream(p, AudioSystem.Looping(s, __loop), __clip.name);
 			Apply();
 			__paused = false;
 			p.StreamPaused = false;
@@ -228,7 +228,7 @@ namespace Svz
 				if (sPool.Count >= 32) p = sPool[0];
 				else { p = new G.AudioStreamPlayer(); Main.Instance.AddChild(p); sPool.Add(p); }
 			}
-			p.Stream = s;
+			GameSettings.SetEffectStream(p, s);
 			p.VolumeDb = G.Mathf.LinearToDb(Math.Max(0.0001f, volume));
 			p.PitchScale = Math.Clamp(Math.Abs(pitch), 0.01f, 4f);
 			p.Play();

@@ -51,6 +51,8 @@ namespace Svz
 			foreach (var a in OS.GetCmdlineUserArgs()) if (a.StartsWith("--level=")) GD.Print(a);
 		}
 
+		public override void _Input(InputEvent input) { GD.Print("game input"); }
+
 		public override void _Notification(int what)
 		{
 			if (what == NotificationWMCloseRequest || what == NotificationApplicationPaused) GD.Print("pause");
@@ -270,7 +272,7 @@ namespace Svz
 // GUIText's glyphs with one DrawTextureRectRegion call. No game code, fonts or layouts.
 namespace UnityEngine
 {
-	public class Object { }
+	public class Object { public string name { get; set; } = ""; }
 	public class Font : Object { }
 	public static class Resources { public static Object Load(string path, System.Type type) => path.Contains("default") ? new Font() : null; }
 	public class GUIElement { }
@@ -340,3 +342,31 @@ public sealed class DebriefingImpl
 		if (label.Length > 0 && eventName.Length > 0) RewardChecks++;
 	}
 }
+
+// Public stand-ins for settings integration: no game assets or proprietary logic.
+public class OptionsImpl { private object mAboutDialog, mConfirmDialog; public void Start() { } public void Update() { } }
+public class PauseMenu { public PauseMenu() { } public void Destroy() { } }
+namespace UnityEngine {
+    public class AudioClip : Object { }
+    public class AudioSource {
+        internal AudioClip __clip = new AudioClip();
+        private Godot.AudioStreamPlayer player;
+        private Godot.AudioStream stream;
+        public void Play(ulong delay) { player.Stream = stream; }
+    }
+}
+namespace Svz {
+    public static class AudioSystem {
+        private static Godot.AudioStreamPlayer player;
+        public static void OneShot(Godot.AudioStream stream, float volume, float pitch) { player.Stream = stream; }
+    }
+    public static class InputState {
+        public static readonly System.Collections.Generic.Dictionary<int,int> sFingers = new();
+        public static readonly System.Collections.Generic.List<int> Touches = new();
+        public static readonly System.Collections.Generic.HashSet<int> sKeys = new(), sKeysDown = new(), sKeysUp = new(), sKeysDownPending = new(), sKeysUpPending = new();
+        public static readonly bool[] sMouse = new bool[3], sMouseDown = new bool[3], sMouseUp = new bool[3], sMousePending = new bool[3], sMouseDownPending = new bool[3], sMouseUpPending = new bool[3];
+        public static string InputString = "", sPendingString = "";
+    }
+}
+
+namespace Svz { public static class SceneManager { public static void Request(int level, bool additive) { } } }

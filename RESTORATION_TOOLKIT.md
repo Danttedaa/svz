@@ -27,6 +27,7 @@ not another game's unreviewed binaries or data.
 | Particle buffers | `tools/binpatch/SvzEnhanced/MeshArrays.cs`, `Reuse.cs` | Reuse arrays and release interop temporaries | Match engine mesh API, growth/shrink behavior and renderer ownership |
 | Font metrics | `tools/binpatch/SvzEnhanced/UiFontQuality.cs` | Scale metrics and wrapping together; select atlas independently | Audit SvZ2 font sets and label geometry |
 | Original glyph sampling | `tools/binpatch/SvzEnhanced/UiText.cs` | Optional filtering of original glyphs, bounded contrast | Visually compare native atlas and HD paths; preserve original designs |
+| Settings skin | `godot/src/Engine/Core/SettingsSkin.cs` | Original-art lookup gated by exact texture size, procedural fallback, large touch targets | Find SvZ2's dialog/button texture ids and sizes |
 | Binary patching | `tools/binpatch/SvzPatch/` | Exact preconditions, post-patch checks, double-patch refusal | New signatures and IL matches for every SvZ2 hook |
 | APK repack/verification | `repack.py`, `tools/verify/` | Package, ABI, signature, manifest and pack integrity checks | Pin SvZ2 inputs and package independently |
 | Android smoke | `emulator_smoke.sh`, `smoke_variant.py` | Isolated diagnostic variants, logs and image capture | Map actual menu/battle entry points and playable save state |
@@ -157,3 +158,31 @@ ClearSurfaces even when the mesh and material identities stay the same: particle
 meshes rebuild in place. Changed materials and replacement meshes must update.
 Benchmark native interop separately from whole-game FPS, and validate an actual
 crowded workload on the target phone before claiming combat improvement.
+
+## Native-styled settings with original art
+
+Reference the installed game's own dialog textures at runtime instead of copying them.
+Gate each by exact dimensions so different data falls back to a procedural theme with
+the same palette. Keep Godot controls (real touch, focus and Back handling); only the
+theme changes. Verify both skins: the runtime tests have no game data, the pinned port does.
+
+## Degenerate bone poses
+
+Single-call `Skeleton3D.SetBonePose` is only safe for well-conditioned bases. Hidden,
+dismembered or flattened bones produce collapsed/coplanar transforms; native Godot then
+logs an error with a backtrace and substitutes identity rotation. Check axis-length ratio
+and volume, and use the original managed decomposition for the rest. Count native errors
+in tests with a `Logger` (`OS.AddLogger`); count them in real battles too.
+
+## Crowded-battle profiling
+
+Use a workload with a measured character count, not a tutorial. Interleave A/B runs and
+compare per-window worst frames and missed frames as well as medians: error or GC bursts
+hide in averages. `perf` resolves managed frames with `DOTNET_PerfMapEnabled=1` and
+`DOTNET_EnableWriteXorExecute=0` (profiling only). Desktop GodotSharp is MinOpt; interop
+costs are overstated relative to Android release builds.
+
+## CPU-aware anti-aliasing
+
+Only remove GPU work under overload when the measured CPU time leaves GPU headroom to
+gain. When CPU-bound, keep MSAA and use the existing fallback. Record the decision in logs.

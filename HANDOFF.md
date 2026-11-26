@@ -1,3 +1,59 @@
+# Audio menu, combat hitches and CPU-aware AA continuation: 2026-11-26 (later)
+
+Branch `enhanced/m27-native-font-baseline`, draft PR #25 (do not merge). Note: the
+repository has no AGENTS.md; HANDOFF.md and RESTORATION_TOOLKIT.md were followed.
+
+1. Audio settings restyle (`4dc9e26`). `SettingsSkin` references the installed game's
+   own textures at runtime: parchment scroll `res://tex/3058` (dialogs), blank
+   red-lacquer button frame `tex/2613` (same as the sushi dialog's button), green check
+   `tex/574`. Each is accepted only at its pinned size; otherwise a procedural skin
+   with the same palette is used (the runtime tests exercise it). Nothing is copied into
+   the repository. Gold medallion grabbers are drawn procedurally. All-caps lettering
+   like the original buttons; white text, dark outline. Touch targets in 1280x720
+   virtual units (x1.5 on the phone): buttons 84, slider rows 76, mute 80. Options entry
+   moved bottom-left (clear of the credit line and the green confirm); pause entry stays
+   bottom-right. Still audio-only. `--test-audio-settings=<s>` delays the diagnostic
+   capture so it can be taken in-game.
+2. Combat hitches (`a10e4b6`). A local crowded-battle harness (below) showed build
+   1052's single-call bone poses sending collapsed/coplanar transforms (dismembered or
+   flattened parts) to `Skeleton3D.SetBonePose`. Godot failed `is_rotation`, logged an
+   error with a C# backtrace and used identity rotation: ~1,600 errors per 85 s battle.
+   Degenerate poses now use the original managed decomposition. `Materials.Get` reuses
+   cached parameter `StringName`s (13 allocations + tracked disposables per refresh).
+3. AA policy (`fd6d368`). If measured main-thread CPU alone is >= 85% of the frame
+   budget, overload no longer removes 2x MSAA (it cannot help) and, after that CPU-bound
+   fallback, MSAA stays on at 60 FPS. Overload with CPU headroom keeps the old order.
+   A user-selected 60 FPS target and `--graphics=original` keep MSAA off. Log line:
+   `load: CPU-bound (x ms of y ms); keeping 2x MSAA`.
+
+Evidence (local x86 VM, NOT phone): full suite passes (94 runtime checks, 16 audio UI
+checks incl. touch/Escape/Back, persistence restarts, 19 patched-behaviour checks). The
+pinned port patches on arm64 and x86_64 (69/69 checks each), double patch refused. Real
+port rendered Options, in-game modal and a crowded battle; no native errors besides the
+VM's missing ALSA device. Headless crowded-battle A/B (3 interleaved runs each, 40
+Farmers vs wave 12, 51 alive): worst frame per 5 s window median 52 -> 12 ms (worst
+88 -> 16.7 ms), missed 120 Hz frames 0.93% -> 0.17%, main-thread CPU median 4.80 ->
+4.61 ms, render sync 3.08 -> 2.87 ms. Desktop GodotSharp is a MinOpt build, so interop
+shares are inflated relative to Android. No phone FPS claim.
+
+Remaining profile (crowded battle, main thread): Render.Sync 44% (skinning 19%,
+MeshCache particle rebuild 13%), AnimationSystem 23% (curve evaluation). These are the
+next CPU targets; they need IL-level changes in the port's render/animation bridge.
+
+Phone checks for this build: audio menu look and touch comfort; Options/pause entries;
+Back/Escape; settings persistence; crowded battle FPS overlay (CPU, render sync, AA);
+whether the `CPU-bound` log appears and AA stays 2x after fallback; dismemberment and
+flattened deaths look as before 1052; any `must be normalized` lines in logcat.
+
+Local harness method (not committed; reflection only, never shipped): build a variant of
+SvzEnhanced with a `[ModuleInitializer]` that, when `SVZ_HARNESS=<wave>` is set, sets
+the profile's wave levels and waveToBeat, unlocks helpers, calls
+`Svz.SceneManager.Request(2)`, then in `InGameImpl` keeps `mAllAlliesInvincibleTimer`
+high and calls `Smithy.ForceSpawn("Farmer")` up to `SVZ_ALLIES`. Profile with
+`perf record -g` plus `DOTNET_PerfMapEnabled=1 DOTNET_EnableWriteXorExecute=0`.
+
+---
+
 # World graphics and material-sync continuation: 2026-11-26
 
 Owner requested graphics enhancement and better combat performance together.

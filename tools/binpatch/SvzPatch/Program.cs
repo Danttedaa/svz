@@ -1004,6 +1004,19 @@ internal static class Program
             instruction.OpCode = OpCodes.Call; instruction.Operand = hook; parameters++;
         }
         Require(parameters >= 10, "world material parameters matched");
+        // Each parameter name is a string literal converted to a new StringName on every refresh.
+        // Route only those literal conversions through one cached StringName per name.
+        var conversions = get.Body.Instructions.Where(i => Calls(i, "Godot.StringName", "op_Implicit") &&
+            ((MethodReference)i.Operand).Parameters.Count == 1 && ((MethodReference)i.Operand).Parameters[0].ParameterType.FullName == "System.String").ToList();
+        Require(conversions.Count == parameters && conversions.All(i => i.Previous?.OpCode == OpCodes.Ldstr),
+            "every material parameter name is one literal StringName conversion");
+        Require(conversions.All(i => i.Next != null && i.Next.OpCode.Code is not (Code.Stloc or Code.Stloc_S or Code.Stloc_0 or Code.Stloc_1 or
+            Code.Stloc_2 or Code.Stloc_3 or Code.Dup or Code.Stfld or Code.Stsfld)) &&
+            !get.Body.Instructions.Any(i => Calls(i, "Godot.StringName", "Dispose")),
+            "material parameter names are passed directly and never disposed");
+        var nameHook = new MethodReference("Name", ((MethodReference)conversions[0].Operand).ReturnType, world) { HasThis = false };
+        nameHook.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+        foreach (var conversion in conversions) conversion.Operand = nameHook;
         var meshGet = Method(module, "Svz.MeshCache", "Get", 1);
         var clears = meshGet.Body.Instructions.Where(i => Calls(i, "Godot.ArrayMesh", "ClearSurfaces")).ToList();
         Require(clears.Count == 1, "one dynamic mesh surface clear");
@@ -1037,6 +1050,12 @@ internal static class Program
         foreach (var old in block.Where(i => i != start)) si.Remove(old);
         sync.Body.OptimizeMacros();
         Require(WorldRenderingPatched(module), "world filtering and material cache hooks");
+    }
+    private static bool MaterialNamesCached(ModuleDefinition module)
+    {
+        var get = Method(module, "Svz.Materials", "Get", 2).Body.Instructions;
+        return !get.Any(i => Calls(i, "Godot.StringName", "op_Implicit")) &&
+            get.Count(i => i.Operand is MethodReference r && r.Name == "Name" && r.DeclaringType.FullName == "Svz.WorldGraphics" && r.DeclaringType.Scope.Name == Enh) >= 10;
     }
     private static bool WorldRenderingPatched(ModuleDefinition module) =>
         Method(module, "Svz.Materials", "Build", 1).Body.Instructions.Any(i => Calls(i, "Svz.WorldGraphics", "TuneShader")) &&
@@ -1214,6 +1233,7 @@ internal static class Program
 			("world sampling restored and material overrides cached with mesh revisions", WorldRenderingPatched(m)),
 			("render state skips unchanged native writes and cameras use adaptive AA", RenderQualityPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
+			("material parameter names reuse cached StringNames", MaterialNamesCached(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
 			("all four particle mesh arrays reused on equal-size frames", ParticleArrayReusePatched(m)),
 			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),

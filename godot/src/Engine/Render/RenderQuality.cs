@@ -99,7 +99,34 @@ namespace Svz
             { Skipped++; return; }
             // Godot decomposes the pose in one native call instead of separate
             // position/scale/rotation interop calls and managed decomposition.
-            skeleton.SetBonePose(bone, value); s.BonePoses[bone] = value; Submitted++;
+            if (WellConditioned(value.Basis)) skeleton.SetBonePose(bone, value);
+            else
+            {
+                // Collapsed or nearly coplanar bones (hidden/dismembered parts, flattened bodies):
+                // native orthonormalization fails is_rotation, logs an error with a C# backtrace
+                // and substitutes identity. Keep the original port's managed decomposition here.
+                skeleton.SetBonePosePosition(bone, value.Origin);
+                skeleton.SetBonePoseScale(bone, value.Basis.Scale);
+                skeleton.SetBonePoseRotation(bone, value.Basis.Orthonormalized().GetRotationQuaternion());
+                Degenerate++;
+            }
+            s.BonePoses[bone] = value; Submitted++;
+        }
+        public static long Degenerate { get; private set; }
+        /// True when single-precision Gram-Schmidt reliably yields a rotation: comparable axis
+        /// lengths and a volume close to that of orthogonal axes. Ordinary animated bones
+        /// (rotation, moderate nonuniform scale, reflection, mild shear) pass.
+        public static bool WellConditioned(in Basis b)
+        {
+            // Raw row fields: no property getters or temporary vectors on the per-bone path.
+            Vector3 r0 = b.Row0, r1 = b.Row1, r2 = b.Row2;
+            float x = r0.X * r0.X + r1.X * r1.X + r2.X * r2.X;
+            float y = r0.Y * r0.Y + r1.Y * r1.Y + r2.Y * r2.Y;
+            float z = r0.Z * r0.Z + r1.Z * r1.Z + r2.Z * r2.Z;
+            float min = Math.Min(x, Math.Min(y, z)), max = Math.Max(x, Math.Max(y, z));
+            if (!(min > 1e-12f) || !float.IsFinite(max) || min < 1e-4f * max) return false;
+            float det = r0.X * (r1.Y * r2.Z - r1.Z * r2.Y) - r0.Y * (r1.X * r2.Z - r1.Z * r2.X) + r0.Z * (r1.X * r2.Y - r1.Y * r2.X);
+            return (double)det * det >= 0.01 * ((double)x * y * z);
         }
         public static void ClearMeshSurfaces(ArrayMesh mesh)
         {

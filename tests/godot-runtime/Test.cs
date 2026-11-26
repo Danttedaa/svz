@@ -397,8 +397,45 @@ public partial class Test : Node
             Check(poseSkeleton.GetBonePose(0).IsEqualApprox(skeleton.GetBonePose(0)),
                 "single-call pose matches original decomposition including nonuniform scale, reflection and shear");
         }
-        long beforePose = RenderQuality.Submitted;
+        // Degenerate bones seen in a crowded battle (dismembered/flattened parts): no native
+        // is_rotation error and the same result as the original managed decomposition.
+        var degenerate = new[] {
+            new Transform3D(Basis.FromEuler(new Vector3(0.4f, 1.1f, -0.2f)).Scaled(new Vector3(1, 0, 1)), new Vector3(1, 2, 3)),
+            new Transform3D(Basis.FromEuler(new Vector3(-0.8f, 0.3f, 0.5f)).Scaled(new Vector3(1, 1, 0.0004f)), Vector3.Zero),
+            new Transform3D(new Basis(Vector3.Zero, Vector3.Zero, Vector3.Zero), new Vector3(0, 1, 0)),
+            new Transform3D(new Basis(new Vector3(-0.716477f, 0, 0.697611f), new Vector3(-0.697611f, 0, -0.716477f), new Vector3(-0.83205f, 0, 0.5547f)), Vector3.Zero),
+        };
+        var errors = new ErrorCounter(); OS.AddLogger(errors);
+        long beforeDegenerate = RenderQuality.Degenerate;
+        bool degenerateMatches = true;
+        foreach (var input in degenerate)
+        {
+            var pose = input;
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            skeleton.SetBonePoseScale(0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+            RenderQuality.BonePose(poseSkeleton, 0, ref pose);
+            degenerateMatches &= poseSkeleton.GetBonePosePosition(0) == skeleton.GetBonePosePosition(0) &&
+                poseSkeleton.GetBonePoseScale(0) == skeleton.GetBonePoseScale(0) &&
+                poseSkeleton.GetBonePoseRotation(0) == skeleton.GetBonePoseRotation(0);
+        }
+        OS.RemoveLogger(errors);
+        Check(degenerateMatches && RenderQuality.Degenerate - beforeDegenerate == degenerate.Length,
+            "collapsed and coplanar bone poses keep the original managed decomposition");
+        Check(errors.Count == 0, $"degenerate bone poses log no native errors (logged {errors.Count})");
+        bool fastPath = true;
+        foreach (var input in poseCases) fastPath &= RenderQuality.WellConditioned(input.Basis);
+        Check(fastPath, "ordinary rotation, nonuniform scale, reflection and shear keep the single native call");
+        int namesBefore = WorldGraphics.NamesCreated;
+        var tintName = WorldGraphics.Name("tint");
+        bool sameName = true;
+        for (int n = 0; n < 1000; n++) sameName &= ReferenceEquals(WorldGraphics.Name("tint"), tintName);
+        Check(sameName, "material parameter names are cached");
+        Check(tintName == new StringName("tint") && WorldGraphics.NamesCreated <= namesBefore + 1,
+            "cached material parameter name equals the original StringName and is created once");
         var samePose = poseCases[3];
+        RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        long beforePose = RenderQuality.Submitted;
         for (int f = 0; f < 1000; f++) RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
         Check(RenderQuality.Submitted == beforePose, "unchanged bone poses skip all native submissions");
         samePose.Origin += new Vector3(0.00001f, 0, 0);
@@ -568,4 +605,12 @@ public partial class Test : Node
 		mPhase = 2;
 		Finish();
 	}
+}
+
+/// Counts native engine errors (e.g. Basis::get_quaternion is_rotation failures) during a check.
+public partial class ErrorCounter : Logger
+{
+    public int Count;
+    public override void _LogError(string function, string file, int line, string code, string rationale, bool editorNotify, int errorType,
+        Godot.Collections.Array<ScriptBacktrace> scriptBacktraces) => System.Threading.Interlocked.Increment(ref Count);
 }

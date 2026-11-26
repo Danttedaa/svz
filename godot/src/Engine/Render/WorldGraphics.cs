@@ -17,6 +17,15 @@ namespace Svz
         public const long MemoryBudget = 24 * 1024 * 1024;
         public static long PreparedBytes { get; private set; }
         public static int PreparedCount { get; private set; }
+        private static readonly System.Collections.Generic.Dictionary<string, StringName> Names = new(StringComparer.Ordinal);
+        public static int NamesCreated => Names.Count;
+        /// Shader parameter names are constant: reuse one StringName per name instead of allocating a
+        /// native StringName (and a tracked disposable) on every material refresh.
+        public static StringName Name(string name)
+        {
+            if (!Names.TryGetValue(name, out var cached)) Names[name] = cached = new StringName(name);
+            return cached;
+        }
         public static string TuneShader(string code)
         {
             if (Legacy || code == null || code.Contains("ALPHA =", StringComparison.Ordinal) ||

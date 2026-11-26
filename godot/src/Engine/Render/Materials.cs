@@ -177,29 +177,29 @@ void light() {
 			if (e.mat == null || e.flags != flags) e.mat = new G.ShaderMaterial { Shader = ShaderFor(flags) };
 			e.flags = flags;
 			var mat = e.mat;
-			WorldGraphics.SetParameter(mat, "main_tex", TexOrWhite(m, "_MainTex", "_Background"));
-			WorldGraphics.SetParameter(mat, "main_st", ST(m, "_MainTex", "_Background"));
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("main_tex"), TexOrWhite(m, "_MainTex", "_Background"));
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("main_st"), ST(m, "_MainTex", "_Background"));
 			if ((flags & F.TwoTex) != 0)
 			{
-				WorldGraphics.SetParameter(mat, "second_tex", TexOrWhite(m, "_SecondTex"));
-				WorldGraphics.SetParameter(mat, "second_st", ST(m, "_SecondTex"));
+				WorldGraphics.SetParameter(mat, WorldGraphics.Name("second_tex"), TexOrWhite(m, "_SecondTex"));
+				WorldGraphics.SetParameter(mat, WorldGraphics.Name("second_st"), ST(m, "_SecondTex"));
 			}
 			Color tint = Color.white;
 			if (!string.IsNullOrEmpty(kind.tint) && m.__colors.TryGetValue(kind.tint, out var tc)) tint = tc;
 			else if (kind.tint == "_TintColor") tint = new Color(0.5f, 0.5f, 0.5f, 0.5f);
-			WorldGraphics.SetParameter(mat, "tint", Render.C(tint));
-			WorldGraphics.SetParameter(mat, "main_int", m.__floats.TryGetValue("_MainTexInt", out var mi) ? mi : 1f);
-			WorldGraphics.SetParameter(mat, "color_intensity", m.__floats.TryGetValue("_ColorIntensity", out var ci) ? ci : 0f);
-			WorldGraphics.SetParameter(mat, "cutoff", m.__floats.TryGetValue("_Cutoff", out var co) ? co : 0.5f);
-			WorldGraphics.SetParameter(mat, "rim_color", Render.C(m.__colors.TryGetValue("_RimColor", out var rc) ? rc : new Color(0, 0, 0, 0)));
-			WorldGraphics.SetParameter(mat, "rim_power", m.__floats.TryGetValue("_RimPower", out var rp) ? rp : 3f);
-			WorldGraphics.SetParameter(mat, "rim_alpha", m.__floats.TryGetValue("_Alpha", out var ra) ? ra : (m.__floats.TryGetValue("_BlendAmt", out var ba) ? ba : 1f));
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("tint"), Render.C(tint));
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("main_int"), m.__floats.TryGetValue("_MainTexInt", out var mi) ? mi : 1f);
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("color_intensity"), m.__floats.TryGetValue("_ColorIntensity", out var ci) ? ci : 0f);
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("cutoff"), m.__floats.TryGetValue("_Cutoff", out var co) ? co : 0.5f);
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("rim_color"), Render.C(m.__colors.TryGetValue("_RimColor", out var rc) ? rc : new Color(0, 0, 0, 0)));
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("rim_power"), m.__floats.TryGetValue("_RimPower", out var rp) ? rp : 3f);
+			WorldGraphics.SetParameter(mat, WorldGraphics.Name("rim_alpha"), m.__floats.TryGetValue("_Alpha", out var ra) ? ra : (m.__floats.TryGetValue("_BlendAmt", out var ba) ? ba : 1f));
 			if (lmTex != null)
 			{
-				WorldGraphics.SetParameter(mat, "lm_tex", lmTex.__Godot);
+				WorldGraphics.SetParameter(mat, WorldGraphics.Name("lm_tex"), lmTex.__Godot);
 				var st = r.__lightmapST;
 				// Unity lightmap ST: uv2 * st.xy + st.zw (applied in Unity uv space, handled by unity_st())
-				WorldGraphics.SetParameter(mat, "lm_st", new G.Vector4(st.x, st.y, st.z, st.w));
+				WorldGraphics.SetParameter(mat, WorldGraphics.Name("lm_st"), new G.Vector4(st.x, st.y, st.z, st.w));
 				e.lmTexVersion = lmTex.__version;
 			}
 			int q = m.renderQueue;

@@ -100,7 +100,7 @@ namespace Svz
 			{
 				// Remove optional GPU work and retry the selected target once before
 				// lowering the frame-rate target.
-				if (RenderQuality.ReduceCostBeforeFallback())
+				if (RenderQuality.ReduceCostBeforeFallback(Settings.TargetFps))
 				{
 					sMonitor.Retarget(Settings.TargetFps);
 					Log("load: disabled 2x MSAA; retrying selected FPS before fallback");
@@ -112,6 +112,10 @@ namespace Svz
 						"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
 						sMonitor.LastWindow, DisplayHz);
 					sFallenBack = true;
+					if (RenderQuality.KeepAaAfterFallback)
+						Log(string.Format(CultureInfo.InvariantCulture,
+							"load: CPU-bound ({0:0.0} ms of {1:0.0} ms); keeping 2x MSAA, which cannot restore the target",
+							RenderQuality.CpuAverageMs, 1000.0 / Settings.TargetFps));
 					Log("fallback reason: " + sFallbackReport);
 					Apply("fallback");
 					sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");

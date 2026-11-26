@@ -33,10 +33,22 @@ namespace Svz
         public static long Skipped { get; private set; }
         private static long LastSubmitted, LastSkipped;
         private static bool BudgetReduced, AaActive;
-        public static void ResetBudget() { BudgetReduced = false; AaActive = false; }
-        public static bool ReduceCostBeforeFallback()
+        /// Set when sustained overload was CPU-bound: optional MSAA then stays on after a 60 FPS fallback.
+        public static bool KeepAaAfterFallback { get; private set; }
+        public static void ResetBudget() { BudgetReduced = false; AaActive = false; KeepAaAfterFallback = false; }
+        /// Rolling average of the measured main-thread game/render-bridge CPU time per frame.
+        public static double CpuAverageMs { get; private set; }
+        public static void RecordFrameCpu(double ms)
+        {
+            if (!double.IsFinite(ms) || ms < 0) return;
+            CpuAverageMs = CpuAverageMs <= 0 ? ms : CpuAverageMs + (ms - CpuAverageMs) * 0.05;
+        }
+        /// Managed CPU alone uses most of the frame budget: removing GPU work cannot restore the target.
+        public static bool CpuBound(int targetFps) => targetFps > 0 && CpuAverageMs >= 0.85 * 1000.0 / targetFps;
+        public static bool ReduceCostBeforeFallback(int targetFps = 120)
         {
             if (Original || BudgetReduced || !AaActive) return false;
+            if (CpuBound(targetFps)) { KeepAaAfterFallback = true; return false; }
             BudgetReduced = true;
             return true;
         }
@@ -44,7 +56,12 @@ namespace Svz
         public static void BeginRender() => RenderStart = Stopwatch.GetTimestamp();
         public static void EndRender() { RenderTicks += Stopwatch.GetTimestamp() - RenderStart; RenderCount++; }
         public static void BeginFrame() => FrameStart = Stopwatch.GetTimestamp();
-        public static void EndFrame() { FrameTicks += Stopwatch.GetTimestamp() - FrameStart; FrameCount++; }
+        public static void EndFrame()
+        {
+            long ticks = Stopwatch.GetTimestamp() - FrameStart;
+            FrameTicks += ticks; FrameCount++;
+            RecordFrameCpu(1000.0 * ticks / Stopwatch.Frequency);
+        }
         public static string Diagnostics()
         {
             long writes = Submitted - LastSubmitted, skipped = Skipped - LastSkipped;
@@ -144,8 +161,11 @@ namespace Svz
             if (state.Materials.TryGetValue(surface, out var previous) && previous == material) { Skipped++; return; }
             node.SetSurfaceOverrideMaterial(surface, material); state.Materials[surface] = material; Submitted++;
         }
+        // 2x MSAA at 120 FPS. After a CPU-bound fallback it stays on at the fallback rate: phone build
+        // 1047 rendered a busy battle with 2x MSAA in about 10 ms, well inside a 16.7 ms frame.
+        // A user-selected 60 FPS target keeps the previous, cheaper behaviour.
         public static Viewport.Msaa Antialiasing(bool original, int effectiveFps) =>
-            original || effectiveFps < 120 ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa2X;
+            original || (effectiveFps < 120 && !KeepAaAfterFallback) ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa2X;
 
         public static void Size(SubViewport viewport, Vector2I value)
         {

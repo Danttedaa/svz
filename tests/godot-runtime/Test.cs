@@ -484,6 +484,22 @@ public partial class Test : Node
 		RenderQuality.ResetBudget();
 		RenderQuality.Size(viewport, new Vector2I(640, 360));
 		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X && viewport.AnisotropicFilteringLevel == Viewport.AnisotropicFiltering.Anisotropy4X, "new level can restore edge smoothing and world filtering");
+		// CPU-bound overload (phone build 1047: 8.7-10.8 ms CPU at a 8.3 ms budget): dropping MSAA
+		// cannot help, so it is kept and the existing fallback proceeds; at 60 FPS AA stays on.
+		for (int f = 0; f < 200; f++) RenderQuality.RecordFrameCpu(9.5);
+		Check(RenderQuality.CpuBound(120) && !RenderQuality.CpuBound(60), "measured 9.5 ms CPU is bound at 120 FPS but not at 60");
+		Check(!RenderQuality.ReduceCostBeforeFallback(120) && RenderQuality.KeepAaAfterFallback,
+			"CPU-bound overload keeps 2x MSAA instead of a futile GPU downshift");
+		Check(RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Msaa2X && RenderQuality.Antialiasing(true, 60) == Viewport.Msaa.Disabled,
+			"after a CPU-bound fallback 2x MSAA remains at 60 FPS; --graphics=original still disables it");
+		RenderQuality.ResetBudget();
+		Check(RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Disabled, "a selected or GPU-bound 60 FPS target keeps MSAA off");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		for (int f = 0; f < 400; f++) RenderQuality.RecordFrameCpu(3.0);
+		Check(!RenderQuality.CpuBound(120) && RenderQuality.ReduceCostBeforeFallback(120) && !RenderQuality.KeepAaAfterFallback,
+			"overload with CPU headroom still removes MSAA first (GPU-bound case unchanged)");
+		RenderQuality.ResetBudget();
+		for (int f = 0; f < 400; f++) RenderQuality.RecordFrameCpu(0);
 		meshNode.QueueFree(); secondNode.QueueFree(); viewport.QueueFree();
 
 

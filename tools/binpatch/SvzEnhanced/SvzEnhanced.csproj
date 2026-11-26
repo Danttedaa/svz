@@ -20,6 +20,7 @@
     <Compile Include="../../../godot/src/Engine/Render/FontTextureCoverage.cs" Link="FontTextureCoverage.cs" />
     <Compile Include="../../../godot/src/Engine/Render/RenderQuality.cs" Link="RenderQuality.cs" />
   <Compile Include="../../../godot/src/Engine/Core/GameSettings.cs" Link="GameSettings.cs" />
+  <Compile Include="../../../godot/src/Engine/Core/SettingsSkin.cs" Link="SettingsSkin.cs" />
   <Compile Include="../../../godot/src/Engine/Render/WorldGraphics.cs" Link="WorldGraphics.cs" />
   </ItemGroup>
 </Project>

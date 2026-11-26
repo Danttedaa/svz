@@ -42,9 +42,17 @@ namespace Svz
             BuildMenu();
             root.GetViewport().SizeChanged += Layout;
             Layout();
-            if (Array.IndexOf(OS.GetCmdlineUserArgs(), "--test-audio-settings") >= 0)
+            // Diagnostic capture: --test-audio-settings[=seconds] opens the modal after that delay
+            // (default 2 s), saves user://settings-preview.png and quits. No gesture is involved.
+            double previewDelay = -1;
+            foreach (var arg in OS.GetCmdlineUserArgs())
+                if (arg == "--test-audio-settings") previewDelay = 2;
+                else if (arg.StartsWith("--test-audio-settings=") && double.TryParse(arg.Substring(22),
+                    System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+                    previewDelay = Math.Clamp(seconds, 0, 600);
+            if (previewDelay >= 0)
             {
-                double remaining = 2;
+                double remaining = previewDelay;
                 Action<double, int> preview = null;
                 preview = (delta, _) => {
                     if ((remaining -= delta) > 0) return;
@@ -125,11 +133,10 @@ namespace Svz
         public static void SetEffectStream(AudioStreamPlayer player, AudioStream stream) => SetStream(player, stream, null);
         public static void RouteVideo(VideoStreamPlayer player) { EnsureBuses(); player.Bus = MasterBus; }
 
-        private static Label Label(string text, int size = 24)
+        private static Label Label(string text, int size = 26)
         {
-            var label = new Label { Text = text };
+            var label = new Label { Text = text, VerticalAlignment = VerticalAlignment.Center };
             label.AddThemeFontSizeOverride("font_size", size);
-            label.AddThemeColorOverride("font_color", new Color("f4e7c8"));
             return label;
         }
         private static void BuildMenu()
@@ -137,42 +144,45 @@ namespace Svz
             Layer?.QueueFree();
             Layer = new CanvasLayer { Layer = 110, Name = "AudioSettings", ProcessMode = Node.ProcessModeEnum.Always };
             Root.AddChild(Layer);
-            Ui = new Control { MouseFilter = Control.MouseFilterEnum.Ignore }; Layer.AddChild(Ui);
-            PauseEntry = new Button { Name = "AudioEntry", Text = "Settings", CustomMinimumSize = new Vector2(220, 56), Visible = false };
+            Ui = new Control { MouseFilter = Control.MouseFilterEnum.Ignore, Theme = SettingsSkin.Build() }; Layer.AddChild(Ui);
+            PauseEntry = new Button { Name = "AudioEntry", Text = "SETTINGS", Visible = false,
+                CustomMinimumSize = new Vector2(SettingsSkin.EntryWidth, SettingsSkin.ButtonHeight) };
             PauseEntry.AddThemeFontSizeOverride("font_size", 26); Ui.AddChild(PauseEntry);
             PauseEntry.Pressed += Open;
             Modal = new Control { Visible = false }; Ui.AddChild(Modal); Modal.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-            var shade = new ColorRect { Color = new Color(0, 0, 0, 0.82f) }; Modal.AddChild(shade);
+            var shade = new ColorRect { Color = new Color(0.04f, 0.01f, 0, 0.72f) }; Modal.AddChild(shade);
             shade.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
             var center = new CenterContainer(); Modal.AddChild(center); center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-            var panel = new PanelContainer { CustomMinimumSize = new Vector2(820, 530) }; center.AddChild(panel);
-            var style = new StyleBoxFlat { BgColor = new Color("261b16"), BorderColor = new Color("b38a4b"),
-                BorderWidthLeft = 3, BorderWidthRight = 3, BorderWidthTop = 3, BorderWidthBottom = 3,
-                CornerRadiusTopLeft = 14, CornerRadiusTopRight = 14, CornerRadiusBottomLeft = 14, CornerRadiusBottomRight = 14,
-                ContentMarginLeft = 34, ContentMarginRight = 34, ContentMarginTop = 25, ContentMarginBottom = 25 };
-            panel.AddThemeStyleboxOverride("panel", style);
-            var box = new VBoxContainer(); box.AddThemeConstantOverride("separation", 16); panel.AddChild(box);
-            var title = Label("SETTINGS", 34); title.HorizontalAlignment = HorizontalAlignment.Center; box.AddChild(title);
-            var subtitle = Label("Audio", 23); subtitle.HorizontalAlignment = HorizontalAlignment.Center; box.AddChild(subtitle);
-            AddSlider(box, "Master volume", () => Master, v => SetAudio(v, Music, Effects, Muted));
-            AddSlider(box, "Music", () => Music, v => SetAudio(Master, v, Effects, Muted));
-            AddSlider(box, "Sound effects", () => Effects, v => SetAudio(Master, Music, v, Muted));
-            var mute = new CheckButton { Name = "AudioMute", Text = "Mute all audio", ButtonPressed = Muted, CustomMinimumSize = new Vector2(0, 54) };
-            mute.AddThemeFontSizeOverride("font_size", 24); box.AddChild(mute);
+            // Parchment scroll as in the game's own dialogs; rollers stay unstretched.
+            var panel = new PanelContainer { Name = "AudioPanel", CustomMinimumSize = new Vector2(1000, 690) }; center.AddChild(panel);
+            var box = new VBoxContainer(); box.AddThemeConstantOverride("separation", 6); panel.AddChild(box);
+            var title = Label("SETTINGS", 46); title.HorizontalAlignment = HorizontalAlignment.Center;
+            title.AddThemeColorOverride("font_color", SettingsSkin.TitleRed); title.AddThemeConstantOverride("outline_size", 12);
+            title.AddThemeColorOverride("font_outline_color", new Color("140302")); box.AddChild(title);
+            var subtitle = Label("AUDIO", 24); subtitle.HorizontalAlignment = HorizontalAlignment.Center; box.AddChild(subtitle);
+            AddSlider(box, "MASTER VOLUME", () => Master, v => SetAudio(v, Music, Effects, Muted));
+            AddSlider(box, "MUSIC", () => Music, v => SetAudio(Master, v, Effects, Muted));
+            AddSlider(box, "SOUND EFFECTS", () => Effects, v => SetAudio(Master, Music, v, Muted));
+            var mute = new CheckButton { Name = "AudioMute", Text = "MUTE ALL AUDIO", ButtonPressed = Muted,
+                CustomMinimumSize = new Vector2(0, SettingsSkin.RowHeight + 4) };
+            box.AddChild(mute);
             mute.Toggled += enabled => { SetAudio(Master, Music, Effects, enabled); Save(); };
-            SaveStatus = Label("Changes save when you close", 18); box.AddChild(SaveStatus);
-            var done = new Button { Name = "AudioDone", Text = "Done", CustomMinimumSize = new Vector2(0, 58) };
-            done.AddThemeFontSizeOverride("font_size", 26); box.AddChild(done); done.Pressed += Close;
+            SaveStatus = Label("Changes save when you close", 19); SaveStatus.HorizontalAlignment = HorizontalAlignment.Center; box.AddChild(SaveStatus);
+            var done = new Button { Name = "AudioDone", Text = "DONE", Icon = SettingsSkin.CheckIcon, ExpandIcon = false,
+                CustomMinimumSize = new Vector2(320, SettingsSkin.ButtonHeight), SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter };
+            done.AddThemeFontSizeOverride("font_size", 32); box.AddChild(done); done.Pressed += Close;
             done.Shortcut = new Shortcut { Events = new Godot.Collections.Array { new InputEventKey { Keycode = Key.Escape } } };
         }
         private static void AddSlider(VBoxContainer parent, string name, Func<double> get, Action<double> set)
         {
-            var row = new HBoxContainer(); row.AddThemeConstantOverride("separation", 22); parent.AddChild(row);
-            var label = Label(name); label.CustomMinimumSize = new Vector2(220, 56); row.AddChild(label);
-            var slider = new HSlider { Name = name == "Master volume" ? "MasterVolume" : name == "Music" ? "MusicVolume" : "EffectsVolume", MinValue = 0, MaxValue = 100, Step = 1, Value = get(),
-                CustomMinimumSize = new Vector2(380, 56), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            var row = new HBoxContainer(); row.AddThemeConstantOverride("separation", 18); parent.AddChild(row);
+            var label = Label(name, 24); label.CustomMinimumSize = new Vector2(214, SettingsSkin.RowHeight); row.AddChild(label);
+            // The whole row height accepts touches; the painted track stays slim like the original HUD bars.
+            var slider = new HSlider { Name = name == "MASTER VOLUME" ? "MasterVolume" : name == "MUSIC" ? "MusicVolume" : "EffectsVolume", MinValue = 0, MaxValue = 100, Step = 1, Value = get(),
+                CustomMinimumSize = new Vector2(352, SettingsSkin.RowHeight), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             row.AddChild(slider);
-            var amount = Label($"{get():0}%"); amount.CustomMinimumSize = new Vector2(65, 56); row.AddChild(amount);
+            var amount = Label($"{get():0}%"); amount.CustomMinimumSize = new Vector2(78, SettingsSkin.RowHeight);
+            amount.HorizontalAlignment = HorizontalAlignment.Right; row.AddChild(amount);
             slider.ValueChanged += value => { set(value); amount.Text = $"{value:0}%"; };
             slider.DragEnded += changed => { if (changed) Save(); };
             slider.FocusExited += () => Save();
@@ -183,11 +193,14 @@ namespace Svz
             Scale = Math.Max(0.1, Math.Min(size.X / 1280.0, size.Y / 720.0));
             Layer.Transform = new Transform2D(0, new Vector2((float)Scale, (float)Scale), 0, Vector2.Zero);
             Ui.Size = size / (float)Scale;
-            PauseEntry.Position = new Vector2(PauseContext ? Ui.Size.X - 250 : (Ui.Size.X - 220) / 2, Ui.Size.Y - 82);
-            PauseEntry.Size = new Vector2(220, 56);
+            // Options: bottom-left, opposite the original green confirm and clear of the centred credit line.
+            // Pause: bottom-right, as before.
+            float w = SettingsSkin.EntryWidth, h = SettingsSkin.ButtonHeight;
+            PauseEntry.Position = new Vector2(PauseContext ? Ui.Size.X - w - 24 : 24, Ui.Size.Y - h - 16);
+            PauseEntry.Size = new Vector2(w, h);
         }
-        public static void ShowPauseEntry(bool show) { if (PauseEntry != null) { PauseContext = true; PauseEntry.Text = "Settings"; PauseEntry.Visible = show; Layout(); } }
-        public static void ShowOptionsEntry() { if (PauseEntry != null) { EntryClosing = false; PauseContext = false; PauseEntry.Text = "Audio settings"; PauseEntry.Visible = true; Layout(); } }
+        public static void ShowPauseEntry(bool show) { if (PauseEntry != null) { PauseContext = true; PauseEntry.Text = "SETTINGS"; PauseEntry.Visible = show; Layout(); } }
+        public static void ShowOptionsEntry() { if (PauseEntry != null) { EntryClosing = false; PauseContext = false; PauseEntry.Text = "AUDIO SETTINGS"; PauseEntry.Visible = true; Layout(); } }
         public static void SceneChanging() { EntryClosing = true; if (PauseEntry != null) PauseEntry.Visible = false; }
         public static void UpdateOptionsAvailability(bool available)
         {

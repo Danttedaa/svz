@@ -63,12 +63,43 @@ public partial class Test : Node
             "persisted mute is applied to the real audio bus on startup");
         GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); Finish();
     }
+    private void SkinChecks(Node layer, Button entry, HSlider slider)
+    {
+        var button = Image.CreateEmpty(256, 128, false, Image.Format.Rgba8);
+        Check(SettingsSkin.Accept(ImageTexture.CreateFromImage(button), new Vector2I(256, 128)) &&
+            !SettingsSkin.Accept(ImageTexture.CreateFromImage(Image.CreateEmpty(255, 128, false, Image.Format.Rgba8)), new Vector2I(256, 128)) &&
+            !SettingsSkin.Accept(null, new Vector2I(256, 128)),
+            "original menu art is used only at the exact pinned texture size");
+        var theme = SettingsSkin.Theme;
+        Check(!SettingsSkin.UsesOriginalArt && theme != null && theme.HasStylebox("normal", "Button") && theme.HasStylebox("panel", "PanelContainer") &&
+            theme.HasIcon("checked", "CheckButton") && theme.HasIcon("unchecked", "CheckButton") &&
+            theme.GetIcon("grabber", "HSlider").GetHeight() >= 48,
+            "without game data the procedural menu skin is complete, with a large slider grabber");
+        var done = (Button)layer.FindChild("AudioDone", true, false);
+        var mute = (CheckButton)layer.FindChild("AudioMute", true, false);
+        var panel = (Control)layer.FindChild("AudioPanel", true, false);
+        // Virtual units: 720 tall, scaled 1.5x on a 1080-line phone.
+        Check(entry.Size.Y >= 84 && done.Size.Y >= 84 && mute.Size.Y >= 80 && slider.Size.Y >= 76 && done.Size.X >= 300,
+            $"touch targets stay large (entry {entry.Size.Y}, done {done.Size.Y}, mute {mute.Size.Y}, slider {slider.Size.Y})");
+        var screen = GetViewport().GetVisibleRect();
+        var panelRect = panel.GetGlobalTransformWithCanvas() * new Rect2(Vector2.Zero, panel.Size);
+        Check(screen.Encloses(panelRect) && panel.Size.X <= panel.CustomMinimumSize.X + 0.5f && panel.Size.Y <= panel.CustomMinimumSize.Y + 0.5f,
+            $"settings scroll fits the screen without growing (panel {panelRect}, screen {screen})");
+        bool fits = true;
+        foreach (var node in panel.FindChildren("*", "Control", true, false))
+            if (node is Control c && c.IsVisibleInTree() && (c.GetCombinedMinimumSize().X > c.Size.X + 0.5f || c.GetCombinedMinimumSize().Y > c.Size.Y + 0.5f))
+            { fits = false; GD.Print($"[settings-ui] clipped {c.Name}: min {c.GetCombinedMinimumSize()} size {c.Size}"); }
+        Check(fits, "no settings label or button is clipped");
+    }
     private async void SettingsUiChecks()
     {
         DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GameSettings.ConfigPath));
         FramePacing.Init(this, _ => { });
         bool previousEmulation = Godot.Input.EmulateMouseFromTouch;
         Godot.Input.EmulateMouseFromTouch = true;
+        // Phone landscape (S25 Ultra default FHD+); the headless default window is only 64x64.
+        GetWindow().Size = new Vector2I(2340, 1080);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         GameSettings.ShowOptionsEntry();
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
@@ -89,6 +120,7 @@ public partial class Test : Node
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         var slider = (HSlider)layer.FindChild("MasterVolume", true, false);
+        SkinChecks(layer, entry, slider);
         void TouchAt(Control control, float fraction)
         {
             var point = control.GetGlobalTransformWithCanvas() * new Vector2(control.Size.X * fraction, control.Size.Y / 2);
@@ -110,7 +142,7 @@ public partial class Test : Node
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         TouchAt(entry, 0.5f);
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        Check(GameSettings.IsOpen && entry.Text == "Settings", "pause-menu entry also opens settings through real touch");
+        Check(GameSettings.IsOpen && entry.Text == "SETTINGS", "pause-menu entry also opens settings through real touch");
         Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = true });
         Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = false });
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);

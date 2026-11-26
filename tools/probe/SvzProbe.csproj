@@ -12,5 +12,6 @@
     <Compile Include="../../godot/src/Engine/Core/FramePacingPolicy.cs" Link="FramePacingPolicy.cs" />
   <Compile Include="../../godot/src/Engine/Render/RenderQuality.cs" Link="RenderQuality.cs" />
   <Compile Include="../../godot/src/Engine/Core/GameSettings.cs" Link="GameSettings.cs" />
+  <Compile Include="../../godot/src/Engine/Core/SettingsSkin.cs" Link="SettingsSkin.cs" />
   </ItemGroup>
 </Project>

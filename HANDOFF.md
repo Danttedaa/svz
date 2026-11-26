@@ -40,6 +40,12 @@ Remaining profile (crowded battle, main thread): Render.Sync 44% (skinning 19%,
 MeshCache particle rebuild 13%), AnimationSystem 23% (curve evaluation). These are the
 next CPU targets; they need IL-level changes in the port's render/animation bridge.
 
+Private build 1053 (`apk-r53-a72d11ef6f9c`, engine a72d11e): patched, signed, verified;
+emulator smoke PASS. Android loaded the original menu art; the emulator battle logged
+`load: CPU-bound (13.6 ms of 8.3 ms); keeping 2x MSAA` (software emulator, not phone
+evidence); zero `must be normalized` lines in the logcat tails. That smoke battle still
+enters InGame directly (blue tutorial, zero kills), so it is not combat evidence.
+
 Phone checks for this build: audio menu look and touch comfort; Options/pause entries;
 Back/Escape; settings persistence; crowded battle FPS overlay (CPU, render sync, AA);
 whether the `CPU-bound` log appears and AA stays 2x after fallback; dismemberment and

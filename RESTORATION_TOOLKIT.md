@@ -142,3 +142,18 @@ and Back handling, and leaves the native controls active while gameplay pauses.
 For a full-source game build, wire PauseMenu construction/destruction to
 ShowPauseEntry(true/false); source and patched audio playback use the same bus
 helpers. No graphics settings are part of this pass, per the owner's request.
+
+## Opaque world sampling and material synchronization
+
+The port's converted world textures can lose original mipmaps. Restore missing
+mips on a duplicate Image and use anisotropic samplers only for opaque spatial
+main/secondary textures. Exclude alpha, cutout and particle/additive shaders,
+lightmaps and GUI atlases. Bound dimensions and cumulative allocation; do not
+claim texture-detail reconstruction from filtering alone. Keep an isolated old
+sampling comparison flag without changing AA or introducing a new gesture.
+
+Cache bridge-owned surface materials per node and mesh revision. Invalidate on
+ClearSurfaces even when the mesh and material identities stay the same: particle
+meshes rebuild in place. Changed materials and replacement meshes must update.
+Benchmark native interop separately from whole-game FPS, and validate an actual
+crowded workload on the target phone before claiming combat improvement.

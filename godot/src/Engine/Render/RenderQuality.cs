@@ -19,7 +19,11 @@ namespace Svz
             public Vector2I Size;
             public Dictionary<int, Vector3> BoneScales;
             public Dictionary<int, Transform3D> BonePoses;
+            public int MeshRevision, MaterialRevision = -1;
+            public ArrayMesh MaterialMesh;
+            public Dictionary<int, Material> Materials;
             public Viewport.Msaa Aa = (Viewport.Msaa)(-1);
+            public Viewport.AnisotropicFiltering Aniso = (Viewport.AnisotropicFiltering)(-1);
         }
         private static readonly ConditionalWeakTable<GodotObject, State> States = new();
         public static double LastFrameMs { get; private set; }
@@ -97,12 +101,31 @@ namespace Svz
             // position/scale/rotation interop calls and managed decomposition.
             skeleton.SetBonePose(bone, value); s.BonePoses[bone] = value; Submitted++;
         }
+        public static void ClearMeshSurfaces(ArrayMesh mesh)
+        {
+            mesh.ClearSurfaces(); States.GetOrCreateValue(mesh).MeshRevision++;
+        }
+        public static void ApplyMaterial(MeshInstance3D node, ArrayMesh mesh, int surface, Material material)
+        {
+            var state = States.GetOrCreateValue(node);
+            int revision = States.GetOrCreateValue(mesh).MeshRevision;
+            state.Materials ??= new Dictionary<int, Material>();
+            if (state.MaterialMesh != mesh || state.MaterialRevision != revision)
+            {
+                state.Materials.Clear(); state.MaterialMesh = mesh; state.MaterialRevision = revision;
+            }
+            if (state.Materials.TryGetValue(surface, out var previous) && previous == material) { Skipped++; return; }
+            node.SetSurfaceOverrideMaterial(surface, material); state.Materials[surface] = material; Submitted++;
+        }
         public static Viewport.Msaa Antialiasing(bool original, int effectiveFps) =>
             original || effectiveFps < 120 ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa2X;
 
         public static void Size(SubViewport viewport, Vector2I value)
         {
             var s = States.GetOrCreateValue(viewport);
+            var aniso = BudgetReduced || FramePacing.EffectiveFps < 120
+                ? Viewport.AnisotropicFiltering.Anisotropy2X : Viewport.AnisotropicFiltering.Anisotropy4X;
+            if (s.Aniso != aniso) { viewport.AnisotropicFilteringLevel = aniso; s.Aniso = aniso; }
             if (!s.HasSize || s.Size != value)
             { viewport.Size = value; s.Size = value; s.HasSize = true; Submitted++; }
             else Skipped++;

@@ -258,6 +258,7 @@ internal static class Program
 		PatchNativeSmallText(module, new TypeReference("Svz", "UiReadableText", module, asmRef));
 		PatchAudioSettings(module, new TypeReference("Svz", "GameSettings", module, asmRef));
 		PatchRenderQuality(module, new TypeReference("Svz", "RenderQuality", module, asmRef));
+        PatchWorldRendering(module, new TypeReference("Svz", "WorldGraphics", module, asmRef), new TypeReference("Svz", "RenderQuality", module, asmRef));
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
 		PatchParticleArrayReuse(module, new TypeReference("Svz", "ParticleArrayReuse", module, asmRef));
@@ -977,9 +978,71 @@ internal static class Program
 	}
 	private static bool RenderQualityPatched(ModuleDefinition module) =>
 		Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Count(i =>
-			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.RenderQuality" && r.DeclaringType.Scope.Name == Enh) == 8 &&
+			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.RenderQuality" && r.DeclaringType.Scope.Name == Enh && RenderSetters.Values.Contains(r.Name)) == 8 &&
 		Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "Size")) &&
         Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "BonePose"));
+
+    private static void PatchWorldRendering(ModuleDefinition module, TypeReference world, TypeReference quality)
+    {
+        var build = Method(module, "Svz.Materials", "Build", 1);
+        build.Body.SimplifyMacros(); var bi = build.Body.GetILProcessor();
+        var tune = new MethodReference("TuneShader", module.TypeSystem.String, world) { HasThis = false };
+        tune.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+        var returns = build.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList();
+        Require(returns.Count == 1, "shader generator has one return");
+        returns[0].OpCode = OpCodes.Call; returns[0].Operand = tune;
+        bi.InsertAfter(returns[0], bi.Create(OpCodes.Ret)); build.Body.OptimizeMacros();
+        var get = Method(module, "Svz.Materials", "Get", 2);
+        int parameters = 0;
+        foreach (var instruction in get.Body.Instructions)
+        {
+            if (!Calls(instruction, "Godot.ShaderMaterial", "SetShaderParameter")) continue;
+            var old = (MethodReference)instruction.Operand;
+            var hook = new MethodReference("SetParameter", module.TypeSystem.Void, world) { HasThis = false };
+            hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+            foreach (var p in old.Parameters) hook.Parameters.Add(new ParameterDefinition(p.ParameterType));
+            instruction.OpCode = OpCodes.Call; instruction.Operand = hook; parameters++;
+        }
+        Require(parameters >= 10, "world material parameters matched");
+        var meshGet = Method(module, "Svz.MeshCache", "Get", 1);
+        var clears = meshGet.Body.Instructions.Where(i => Calls(i, "Godot.ArrayMesh", "ClearSurfaces")).ToList();
+        Require(clears.Count == 1, "one dynamic mesh surface clear");
+        var clearOld = (MethodReference)clears[0].Operand;
+        var clear = new MethodReference("ClearMeshSurfaces", module.TypeSystem.Void, quality) { HasThis = false };
+        clear.Parameters.Add(new ParameterDefinition(clearOld.DeclaringType));
+        clears[0].OpCode = OpCodes.Call; clears[0].Operand = clear;
+        var sync = Method(module, "Svz.Render", "SyncRenderer", 1);
+        sync.Body.SimplifyMacros(); var si = sync.Body.GetILProcessor(); var instructions = sync.Body.Instructions;
+        var getter = instructions.Single(i => Calls(i, "Godot.MeshInstance3D", "GetSurfaceOverrideMaterial"));
+        var setter = instructions.Single(i => Calls(i, "Godot.MeshInstance3D", "SetSurfaceOverrideMaterial"));
+        var meshLoad = instructions.Single(i => Calls(i, "Godot.Mesh", "GetSurfaceCount")).Previous;
+        Require(meshLoad.OpCode == OpCodes.Ldloc || meshLoad.OpCode == OpCodes.Ldsfld, "render mesh is a simple stable load");
+        Require(getter.Previous.OpCode == OpCodes.Ldloc && getter.Previous.Previous.OpCode == OpCodes.Ldloc &&
+            getter.Next.OpCode == OpCodes.Ldloc && getter.Next.Next.OpCode == OpCodes.Beq && getter.Next.Next.Operand == setter.Next,
+            "original material comparison block");
+        var start = getter.Previous.Previous;
+        int from = instructions.IndexOf(start), to = instructions.IndexOf(setter);
+        var block = instructions.Skip(from).Take(to - from + 1).ToHashSet();
+        Require(!instructions.Any(i => i.Operand is Instruction target && block.Contains(target)), "no branch enters material assignment block");
+        var material = (MethodReference)setter.Operand;
+        var hookMaterial = new MethodReference("ApplyMaterial", module.TypeSystem.Void, quality) { HasThis = false };
+        hookMaterial.Parameters.Add(new ParameterDefinition(material.DeclaringType));
+        hookMaterial.Parameters.Add(new ParameterDefinition(ExistingTypeRef(module, "Godot.ArrayMesh")));
+        foreach (var p in material.Parameters) hookMaterial.Parameters.Add(new ParameterDefinition(p.ParameterType));
+        Instruction copyMesh = meshLoad.Operand is VariableDefinition v ? si.Create(OpCodes.Ldloc, v) : si.Create(OpCodes.Ldsfld, (FieldReference)meshLoad.Operand);
+        var index = si.Create(OpCodes.Ldloc, (VariableDefinition)getter.Previous.Operand);
+        var value = si.Create(OpCodes.Ldloc, (VariableDefinition)getter.Next.Operand);
+        var call = si.Create(OpCodes.Call, hookMaterial);
+        si.InsertAfter(start, copyMesh); si.InsertAfter(copyMesh, index); si.InsertAfter(index, value); si.InsertAfter(value, call);
+        foreach (var old in block.Where(i => i != start)) si.Remove(old);
+        sync.Body.OptimizeMacros();
+        Require(WorldRenderingPatched(module), "world filtering and material cache hooks");
+    }
+    private static bool WorldRenderingPatched(ModuleDefinition module) =>
+        Method(module, "Svz.Materials", "Build", 1).Body.Instructions.Any(i => Calls(i, "Svz.WorldGraphics", "TuneShader")) &&
+        Method(module, "Svz.Materials", "Get", 2).Body.Instructions.Any(i => Calls(i, "Svz.WorldGraphics", "SetParameter")) &&
+        Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "ApplyMaterial")) &&
+        Method(module, "Svz.MeshCache", "Get", 1).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "ClearMeshSurfaces"));
 
 	private static void PatchBonePose(ModuleDefinition module, TypeReference helper)
 	{
@@ -1148,6 +1211,7 @@ internal static class Program
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
 			("small labels can bypass distressed bitmap font with a native fallback", NativeSmallTextPatched(m)),
 			("audio settings menu, modal input reset and split music/effect buses", AudioSettingsPatched(m)),
+			("world sampling restored and material overrides cached with mesh revisions", WorldRenderingPatched(m)),
 			("render state skips unchanged native writes and cameras use adaptive AA", RenderQualityPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),

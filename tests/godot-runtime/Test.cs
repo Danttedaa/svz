@@ -410,11 +410,11 @@ public partial class Test : Node
 		Check(viewport.Size == new Vector2I(640, 360), "viewport still resizes on orientation or resolution change");
 		Check(RenderQuality.ReduceCostBeforeFallback(), "AA cost is removed before sacrificing selected FPS");
 		RenderQuality.Size(viewport, new Vector2I(640, 360));
-		Check(viewport.Msaa3D == Viewport.Msaa.Disabled && FramePacing.EffectiveFps == 120 &&
+		Check(viewport.Msaa3D == Viewport.Msaa.Disabled && viewport.AnisotropicFilteringLevel == Viewport.AnisotropicFiltering.Anisotropy2X && FramePacing.EffectiveFps == 120 &&
 			!RenderQuality.ReduceCostBeforeFallback(), "AA downshift retains 120 and happens only once per level");
 		RenderQuality.ResetBudget();
 		RenderQuality.Size(viewport, new Vector2I(640, 360));
-		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X, "new level can restore edge smoothing");
+		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X && viewport.AnisotropicFilteringLevel == Viewport.AnisotropicFiltering.Anisotropy4X, "new level can restore edge smoothing and world filtering");
 		meshNode.QueueFree(); secondNode.QueueFree(); viewport.QueueFree();
 
 
@@ -469,6 +469,55 @@ public partial class Test : Node
             "closing emulated mouse release cannot activate a legacy button underneath Done");
         Check(!GameSettings.BlockGameInput(new InputEventScreenTouch { Position = Vector2.Zero, Pressed = true }), "closed settings accept fresh ordinary game touches");
         GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); musicPlayer.QueueFree();
+
+        var worldCode = "shader_type spatial; uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_enable; void fragment() { ALBEDO = texture(main_tex, UV).rgb; }";
+        var tunedCode = WorldGraphics.TuneShader(worldCode);
+        Check(tunedCode.Contains("filter_linear_mipmap_anisotropic"), "opaque world shader receives anisotropic sampling");
+        foreach (var excluded in new[] { "ALPHA = 1.0;", "discard;", "blend_add", "blend_premul_alpha" })
+            Check(WorldGraphics.TuneShader(worldCode + excluded) == worldCode + excluded,
+                "transparent, cutout and effect shaders keep original sampling");
+        using var originalWorldImage = Image.CreateEmpty(16, 16, false, Image.Format.Rgba8);
+        originalWorldImage.Fill(new Color(0.3f, 0.6f, 0.2f, 1));
+        using var originalWorldTexture = ImageTexture.CreateFromImage(originalWorldImage);
+        var preparedWorld = WorldGraphics.Prepare(originalWorldTexture);
+        using var preparedImage = preparedWorld.GetImage(); using var untouchedImage = originalWorldTexture.GetImage();
+        Check(preparedImage.HasMipmaps() && !untouchedImage.HasMipmaps() &&
+            preparedImage.GetPixel(0, 0).IsEqualApprox(untouchedImage.GetPixel(0, 0)),
+            "world mip chain is restored without modifying original base pixels or source texture");
+        Check(ReferenceEquals(preparedWorld, WorldGraphics.Prepare(originalWorldTexture)), "world textures are prepared only once");
+        Check(WorldGraphics.MipBytes(4096, 4096) == 0 && WorldGraphics.MipBytes(16, 16) == 1364 &&
+            WorldGraphics.PreparedBytes <= WorldGraphics.MemoryBudget, "world texture size and memory budgets are bounded");
+        var renderedMesh = new ArrayMesh(); var renderedNode = new MeshInstance3D(); AddChild(renderedNode);
+        var arrays = new Godot.Collections.Array(); arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = new Vector3[] { Vector3.Zero, Vector3.Right, Vector3.Up };
+        void BuildSurface(ArrayMesh mesh) => mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        BuildSurface(renderedMesh); renderedNode.Mesh = renderedMesh;
+        var firstMat = new StandardMaterial3D(); var secondMat = new StandardMaterial3D();
+        long beforeMaterial = RenderQuality.Submitted;
+        for (int i = 0; i < 1000; i++) RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, firstMat);
+        Check(RenderQuality.Submitted - beforeMaterial == 1 && renderedNode.GetSurfaceOverrideMaterial(0) == firstMat,
+            "1000 unchanged material frames submit one override without repeated native reads");
+        RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, secondMat);
+        Check(renderedNode.GetSurfaceOverrideMaterial(0) == secondMat, "changing character material still updates immediately");
+        RenderQuality.ClearMeshSurfaces(renderedMesh); BuildSurface(renderedMesh);
+        beforeMaterial = RenderQuality.Submitted;
+        RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, secondMat);
+        Check(RenderQuality.Submitted == beforeMaterial + 1 && renderedNode.GetSurfaceOverrideMaterial(0) == secondMat,
+            "particle-style mesh rebuild invalidates cached material even when material identity is unchanged");
+        var replacementMesh = new ArrayMesh(); BuildSurface(replacementMesh); renderedNode.Mesh = replacementMesh;
+        RenderQuality.ApplyMaterial(renderedNode, replacementMesh, 0, firstMat);
+        Check(renderedNode.GetSurfaceOverrideMaterial(0) == firstMat, "replacement meshes receive their own material state");
+        var oldMaterialTimes = new List<double>(); var newMaterialTimes = new List<double>();
+        for (int run = 0; run < 5; run++) {
+            ulong started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) if (renderedNode.GetSurfaceOverrideMaterial(0) != firstMat) renderedNode.SetSurfaceOverrideMaterial(0, firstMat);
+            oldMaterialTimes.Add((Time.GetTicksUsec() - started) / 1000.0); started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) RenderQuality.ApplyMaterial(renderedNode, replacementMesh, 0, firstMat);
+            newMaterialTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+        }
+        oldMaterialTimes.Sort(); newMaterialTimes.Sort();
+        GD.Print(System.FormattableString.Invariant($"[benchmark] 20000 static material checks median: old={oldMaterialTimes[2]:0.00}ms new={newMaterialTimes[2]:0.00}ms"));
+        renderedNode.QueueFree(); arrays.Dispose();
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;

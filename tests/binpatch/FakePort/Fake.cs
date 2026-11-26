@@ -216,8 +216,9 @@ namespace Svz
 	/// Same Godot call shapes as the port's MeshCache (built, never run off-engine here).
 	public static class MeshCache
 	{
-		public static ArrayMesh Get(ArrayMesh gm, Vector3[] pos, int[] idx)
+		public static ArrayMesh Get(ArrayMesh gm)
 		{
+            var pos = new Vector3[3]; var idx = new[] { 0, 1, 2 }; gm.ClearSurfaces();
 			var arrays = new Godot.Collections.Array();
 			arrays.Resize((int)Mesh.ArrayType.Max);
 			arrays[(int)Mesh.ArrayType.Vertex] = pos;
@@ -248,6 +249,7 @@ namespace Svz
 	public static class Render
 	{
 		public static int Hidden;
+        public static ArrayMesh TestMesh; public static ShaderMaterial TestMaterial;
         public static void Sync() { }
         public static SubViewport TestViewport;
         private static void SyncCameras() { TestViewport.Size = new Vector2I(640, 360); }
@@ -263,6 +265,14 @@ namespace Svz
             else if (Hidden == 1) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.One);
             else if (Hidden == 2) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Up);
             else node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Right);
+            var gm = TestMesh;
+            if (node.Mesh != gm) node.Mesh = gm;
+            int surfaces = gm.GetSurfaceCount();
+            for (int i = 0; i < surfaces; i++)
+            {
+                var material = Materials.Get(TestMaterial, r);
+                if (node.GetSurfaceOverrideMaterial(i) != material) node.SetSurfaceOverrideMaterial(i, material);
+            }
 		}
 	}
 }
@@ -370,3 +380,19 @@ namespace Svz {
 }
 
 namespace Svz { public static class SceneManager { public static void Request(int level, bool additive) { } } }
+
+namespace Svz {
+    public static class Materials {
+        private static string Build(int flags) => new System.Text.StringBuilder("shader_type spatial;").ToString();
+        public static Godot.Material Get(ShaderMaterial material, object renderer) {
+            material.SetShaderParameter("main_tex", (Texture2D)null);
+            material.SetShaderParameter("second_tex", (Texture2D)null);
+            material.SetShaderParameter("tint", Colors.White);
+            material.SetShaderParameter("a", 1f); material.SetShaderParameter("b", 2f);
+            material.SetShaderParameter("c", 3f); material.SetShaderParameter("d", 4f);
+            material.SetShaderParameter("e", 5f); material.SetShaderParameter("f", 6f);
+            material.SetShaderParameter("g", 7f); material.SetShaderParameter("h", 8f);
+            return material;
+        }
+    }
+}

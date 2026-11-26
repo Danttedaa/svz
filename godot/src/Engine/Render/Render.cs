@@ -622,7 +622,7 @@ namespace Svz
 			{
 				Material m = r.__mats.Length == 0 ? null : r.__mats[Math.Min(i, r.__mats.Length - 1)];
 				var gmat = Materials.Get(m, r);
-				if (node.GetSurfaceOverrideMaterial(i) != gmat) node.SetSurfaceOverrideMaterial(i, gmat);
+				RenderQuality.ApplyMaterial(node, gm, i, gmat);
 			}
 		}
 	}
@@ -685,7 +685,7 @@ namespace Svz
 			if (m.__gmesh != null && m.__gmeshVersion == m.__version) return m.__gmesh;
 			int n = m.vertexCount;
 			var gm = m.__gmesh ?? new G.ArrayMesh();
-			gm.ClearSurfaces();
+			RenderQuality.ClearMeshSurfaces(gm);
 			var pos = new G.Vector3[n];
 			for (int i = 0; i < n; i++) pos[i] = Render.V(m.__v[i]);
 			G.Vector3[] nrm = null;

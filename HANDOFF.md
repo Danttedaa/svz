@@ -1,3 +1,40 @@
+# World graphics and material-sync continuation: 2026-11-26
+
+Owner requested graphics enhancement and better combat performance together.
+Original characters, artwork and accepted GUI/font rendering remain the baseline.
+No graphics settings were added to the audio-only menu.
+
+WorldGraphics restores mipmaps and enables anisotropic sampling for opaque 3D
+main/secondary textures. Transparent, cutout, particle/additive shaders, GUI text
+and lightmaps keep their prior sampling path. The source Image is duplicated
+before mip generation because GetImage can return shared image data. Original
+base pixels and source texture state remain unchanged. Extra RGBA mip textures
+are limited to 1024 per dimension and a cumulative conservative 24 MiB budget.
+The local game-world render prepared 16 textures using 9,961,488 bytes (~9.5 MiB).
+Camera filtering uses 4x anisotropy, reducing to 2x with the existing load budget.
+`--test-legacy-textures` compares old texture sampling while retaining the same
+AA and material-cache path. This improves sampling, not authored texture detail.
+
+Combat path: material override assignments now cache per node, surface and mesh
+revision rather than making a native GetSurfaceOverrideMaterial call every frame.
+MeshCache.ClearSurfaces bumps a weak per-mesh revision; rebuilt particle meshes,
+replacement meshes and changed materials still receive an override immediately.
+All source material-parameter temporaries are disposed after Godot has copied
+them, avoiding finalizer backlog. The cache is for bridge-owned state only.
+
+Validation: complete suite passes, including 84 primary real-Godot runtime checks,
+11 audio interaction/Back checks, two audio process-restart checks and 19 patched
+behavior checks. New checks cover opaque shader selection, effect exclusions,
+original texture immutability, mip/cache bounds, changed materials and dynamic
+mesh rebuilds. Exact pinned-port patching and helper resolution pass; both old
+and new world sampling render through MainMenu into InGame without shader errors.
+Local warmed median of five runs: 20,000 static material checks, 2.06 ms old vs
+0.52 ms cached. This is an interop microbenchmark, not a phone FPS claim. The
+local scene is a tutorial, not proof of crowded combat. Phone visual/performance
+acceptance remains required for the new APK.
+
+---
+
 # Audio settings continuation: 2026-11-26
 
 User requested a settings section, then explicitly deferred graphics settings

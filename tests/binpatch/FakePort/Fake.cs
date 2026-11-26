@@ -31,7 +31,7 @@ namespace Svz
 	using Mathf = UnityEngine.Mathf;
 
 	public static class Toast { public static void Show(string text) { GD.Print(text); } }
-	public static class Movie { public static bool Playing => false; public static void Update() { } }
+	public static class Movie { public static bool Playing => false; public static void Update() { } public static void Play(VideoStreamPlayer player) { player.Play(); } }
 
 	public partial class Main : Node
 	{
@@ -50,6 +50,8 @@ namespace Svz
 			Godot.Engine.MaxFps = 60;
 			foreach (var a in OS.GetCmdlineUserArgs()) if (a.StartsWith("--level=")) GD.Print(a);
 		}
+
+		public override void _Input(InputEvent input) { GD.Print("game input"); }
 
 		public override void _Notification(int what)
 		{
@@ -141,6 +143,26 @@ internal sealed class FontSetFinder
 }
 
 
+// Synthetic Unity structs/renderer used to validate retained mesh-array identity.
+namespace UnityEngine
+{
+	public struct Vector3 { public float x, y, z; }
+	public struct Vector2 { public float x, y; }
+	public struct Color { public float r, g, b, a; }
+	public sealed class Mesh
+	{
+		internal Vector3[] __v = Array.Empty<Vector3>();
+		internal Vector2[] __uv = Array.Empty<Vector2>();
+		internal Color[] __c = Array.Empty<Color>();
+		internal System.Collections.Generic.List<int[]> __subs = new() { Array.Empty<int>() };
+	}
+	public sealed class ParticleRenderer
+	{
+		internal readonly Mesh __pmesh = new Mesh();
+		public int ParticleCount { get; set; }
+	}
+}
+
 namespace Svz
 {
 	// Stand-in iteration shapes only; no proprietary particle/animation data.
@@ -153,6 +175,26 @@ namespace Svz
 	public static class Particles
 	{
 		public static readonly System.Collections.Generic.List<FakeParticleEmitter> Emitters = new();
+		// Mirrors the four allocations and the particle mesh field ownership in the port.
+		public static UnityEngine.Mesh BuildMesh(UnityEngine.ParticleRenderer renderer, object camera)
+		{
+			var mesh = renderer.__pmesh;
+			int n = renderer.ParticleCount;
+			var v = new UnityEngine.Vector3[n * 4];
+			var uv = new UnityEngine.Vector2[n * 4];
+			var col = new UnityEngine.Color[n * 4];
+			var tri = new int[n * 6];
+			for (int i = 0; i < n * 4; i++)
+			{
+				v[i] = new UnityEngine.Vector3 { x = i + n };
+				uv[i] = new UnityEngine.Vector2 { x = i };
+				col[i] = new UnityEngine.Color { a = n };
+			}
+			for (int i = 0; i < n * 6; i++) tri[i] = i;
+			mesh.__v = v; mesh.__uv = uv; mesh.__c = col;
+			mesh.__subs = new System.Collections.Generic.List<int[]> { tri };
+			return mesh;
+		}
 		public static void Update(float dt)
 		{
 			foreach (var e in Emitters.ToArray()) { if (e != null) { } }
@@ -174,8 +216,9 @@ namespace Svz
 	/// Same Godot call shapes as the port's MeshCache (built, never run off-engine here).
 	public static class MeshCache
 	{
-		public static ArrayMesh Get(ArrayMesh gm, Vector3[] pos, int[] idx)
+		public static ArrayMesh Get(ArrayMesh gm)
 		{
+            var pos = new Vector3[3]; var idx = new[] { 0, 1, 2 }; gm.ClearSurfaces();
 			var arrays = new Godot.Collections.Array();
 			arrays.Resize((int)Mesh.ArrayType.Max);
 			arrays[(int)Mesh.ArrayType.Vertex] = pos;
@@ -191,12 +234,45 @@ namespace Svz
 		}
 	}
 
+    public static class Skinning
+    {
+        public static void Sync(Skeleton3D skeleton, int bone, Transform3D value)
+        {
+            skeleton.SetBonePosePosition(bone, value.Origin);
+            var basis = value.Basis;
+            var scale = basis.Scale;
+            skeleton.SetBonePoseScale(bone, scale);
+            skeleton.SetBonePoseRotation(bone, basis.Orthonormalized().GetRotationQuaternion());
+        }
+    }
+
 	public static class Render
 	{
 		public static int Hidden;
+        public static ArrayMesh TestMesh; public static ShaderMaterial TestMaterial;
+        public static void Sync() { }
+        public static SubViewport TestViewport;
+        private static void SyncCameras() { TestViewport.Size = new Vector2I(640, 360); }
 		private static void SyncRenderer(object r)
 		{
 			if (r is string && System.Environment.GetEnvironmentVariable("SVZ_NOPARTICLES") == "1") Hidden++;
+            if (r is not MeshInstance3D node) return;
+            if (Hidden < 0) { node.Visible = false; return; }
+            node.Visible = true;
+            node.Layers = 3;
+            node.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            if (Hidden == 0) node.GlobalTransform = Transform3D.Identity;
+            else if (Hidden == 1) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.One);
+            else if (Hidden == 2) node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Up);
+            else node.GlobalTransform = new Transform3D(Basis.Identity, Vector3.Right);
+            var gm = TestMesh;
+            if (node.Mesh != gm) node.Mesh = gm;
+            int surfaces = gm.GetSurfaceCount();
+            for (int i = 0; i < surfaces; i++)
+            {
+                var material = Materials.Get(TestMaterial, r);
+                if (node.GetSurfaceOverrideMaterial(i) != material) node.SetSurfaceOverrideMaterial(i, material);
+            }
 		}
 	}
 }
@@ -206,7 +282,7 @@ namespace Svz
 // GUIText's glyphs with one DrawTextureRectRegion call. No game code, fonts or layouts.
 namespace UnityEngine
 {
-	public class Object { }
+	public class Object { public string name { get; set; } = ""; }
 	public class Font : Object { }
 	public static class Resources { public static Object Load(string path, System.Type type) => path.Contains("default") ? new Font() : null; }
 	public class GUIElement { }
@@ -252,4 +328,71 @@ namespace Svz
 			}
 		}
 	}
+}
+
+
+// Stand-in for the two obsolete market-rating branches in DebriefingImpl.
+// This remains a synthetic behaviour test and contains no original game code.
+public static class ApplicationUtilities
+{
+	public static bool IsBuildType(string build) => build == "google";
+}
+public sealed class DebriefingImpl
+{
+	public int RewardChecks { get; private set; }
+	public int RatingPrompts { get; private set; }
+	private void DisplayStats()
+	{
+		RewardChecks++;
+		if (ApplicationUtilities.IsBuildType("amazon")) RatingPrompts++;
+		else if (ApplicationUtilities.IsBuildType("google")) RatingPrompts++;
+		// Original victory statistics and coin bookkeeping must still execute.
+		string label = "debrief_victory";
+		string eventName = "CoinsGained";
+		if (label.Length > 0 && eventName.Length > 0) RewardChecks++;
+	}
+}
+
+// Public stand-ins for settings integration: no game assets or proprietary logic.
+public class OptionsImpl { private object mAboutDialog, mConfirmDialog; public void Start() { } public void Update() { } }
+public class PauseMenu { public PauseMenu() { } public void Destroy() { } }
+namespace UnityEngine {
+    public class AudioClip : Object { }
+    public class AudioSource {
+        internal AudioClip __clip = new AudioClip();
+        private Godot.AudioStreamPlayer player;
+        private Godot.AudioStream stream;
+        public void Play(ulong delay) { player.Stream = stream; }
+    }
+}
+namespace Svz {
+    public static class AudioSystem {
+        private static Godot.AudioStreamPlayer player;
+        public static void OneShot(Godot.AudioStream stream, float volume, float pitch) { player.Stream = stream; }
+    }
+    public static class InputState {
+        public static readonly System.Collections.Generic.Dictionary<int,int> sFingers = new();
+        public static readonly System.Collections.Generic.List<int> Touches = new();
+        public static readonly System.Collections.Generic.HashSet<int> sKeys = new(), sKeysDown = new(), sKeysUp = new(), sKeysDownPending = new(), sKeysUpPending = new();
+        public static readonly bool[] sMouse = new bool[3], sMouseDown = new bool[3], sMouseUp = new bool[3], sMousePending = new bool[3], sMouseDownPending = new bool[3], sMouseUpPending = new bool[3];
+        public static string InputString = "", sPendingString = "";
+    }
+}
+
+namespace Svz { public static class SceneManager { public static void Request(int level, bool additive) { } } }
+
+namespace Svz {
+    public static class Materials {
+        private static string Build(int flags) => new System.Text.StringBuilder("shader_type spatial;").ToString();
+        public static Godot.Material Get(ShaderMaterial material, object renderer) {
+            material.SetShaderParameter("main_tex", (Texture2D)null);
+            material.SetShaderParameter("second_tex", (Texture2D)null);
+            material.SetShaderParameter("tint", Colors.White);
+            material.SetShaderParameter("a", 1f); material.SetShaderParameter("b", 2f);
+            material.SetShaderParameter("c", 3f); material.SetShaderParameter("d", 4f);
+            material.SetShaderParameter("e", 5f); material.SetShaderParameter("f", 6f);
+            material.SetShaderParameter("g", 7f); material.SetShaderParameter("h", 8f);
+            return material;
+        }
+    }
 }

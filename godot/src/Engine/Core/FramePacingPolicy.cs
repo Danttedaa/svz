@@ -75,7 +75,7 @@ namespace Svz
 	/// What to tell the engine and the display for a given frame-rate target.
 	public readonly struct PacingDecision
 	{
-		/// Value for Godot's Engine.MaxFps. 0 = no software limiter, VSync paces frames.
+		/// Value for Godot's Engine.MaxFps. Always positive: software cap complements VSync.
 		public readonly int EngineMaxFps;
 		/// Refresh rate to request from Android (0 = do not request).
 		public readonly float RequestHz;
@@ -97,15 +97,17 @@ namespace Svz
 		/// Decide how to pace `targetFps` on a display that currently runs at `displayHz`
 		/// (<= 0 when unknown). VSync is assumed on.
 		///
-		/// When the display already runs at the target rate, the software limiter is switched off and
-		/// VSync alone paces frames: a sleep-based limiter running at exactly the refresh rate drifts
-		/// against VSync and causes periodic doubled frames (judder). Otherwise the limiter caps at the
-		/// target, and the display is asked to switch to the target rate.
+		/// Cap all engine frame rates at or below 120, even on matching 120 Hz displays.
+		/// VSync still paces presentation; a second software limiter may introduce some
+		/// jitter on near-matching refresh intervals, so verify 120 Hz frame-time p95
+		/// on actual hardware. Do not mistake a cap for a performance optimization.
 		public static PacingDecision Decide(int targetFps, double displayHz, bool requestDisplayRate)
 		{
 			if (targetFps <= 0) targetFps = 60;
+			// Defensive upper bound even if a future caller bypasses FrameSettings.Sanitize.
+			targetFps = Math.Min(targetFps, 120);
 			bool matches = displayHz > 0 && Math.Abs(displayHz - targetFps) <= HzTolerance;
-			return new PacingDecision(matches ? 0 : targetFps, requestDisplayRate ? targetFps : 0f, matches);
+			return new PacingDecision(targetFps, requestDisplayRate ? targetFps : 0f, matches);
 		}
 
 		/// Frame-rate independent replacement for `smooth = Lerp(smooth, dt, 0.1)` (which was tuned per
@@ -123,8 +125,10 @@ namespace Svz
 	///
 	/// A frame is "missed" when it took longer than 1.5 target frame intervals (i.e. at least one
 	/// VSync was skipped). After a startup grace period, frames are grouped into windows; a window is
-	/// "slow" when more than `MissRatio` of its frames were missed or its average rate is below
-	/// `MinRateRatio` of the target. `SlowWindowsToFallback` consecutive slow windows trigger the
+	/// "slow" when more than `MissRatio` of its frames were missed or its average rate is severely
+	/// below `MinRateRatio` of the target. Moderate 80-95 FPS combat on a 120 Hz screen should
+	/// remain uncapped instead of immediately becoming a forced 60 FPS mode.
+	/// `SlowWindowsToFallback` consecutive slow windows trigger the
 	/// fallback. A long frame (> HitchSeconds: level load, app switch) restarts the grace period, so
 	/// loading never counts against the target. Device temperature is not read.
 	public sealed class FallbackMonitor
@@ -132,7 +136,10 @@ namespace Svz
 		public double StartupGraceSeconds = 10.0;
 		public double WindowSeconds = 5.0;
 		public double MissRatio = 0.20;
-		public double MinRateRatio = 0.80;
+		// Hard fallback should be a last resort: at ~86 FPS with ~1% long frames the
+		// old 0.80 threshold (96 FPS) unnecessarily forced a 60 FPS lock.
+		// >=20% long frames remains an independent safety fallback trigger.
+		public double MinRateRatio = 0.60;
 		public int SlowWindowsToFallback = 2;
 		public double HitchSeconds = 0.25;
 

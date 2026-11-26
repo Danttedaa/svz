@@ -1,3 +1,270 @@
+# Audio menu, combat hitches and CPU-aware AA continuation: 2026-11-26 (later)
+
+Branch `enhanced/m27-native-font-baseline`, draft PR #25 (do not merge). Note: the
+repository has no AGENTS.md; HANDOFF.md and RESTORATION_TOOLKIT.md were followed.
+
+1. Audio settings restyle (`4dc9e26`). `SettingsSkin` references the installed game's
+   own textures at runtime: parchment scroll `res://tex/3058` (dialogs), blank
+   red-lacquer button frame `tex/2613` (same as the sushi dialog's button), green check
+   `tex/574`. Each is accepted only at its pinned size; otherwise a procedural skin
+   with the same palette is used (the runtime tests exercise it). Nothing is copied into
+   the repository. Gold medallion grabbers are drawn procedurally. All-caps lettering
+   like the original buttons; white text, dark outline. Touch targets in 1280x720
+   virtual units (x1.5 on the phone): buttons 84, slider rows 76, mute 80. Options entry
+   moved bottom-left (clear of the credit line and the green confirm); pause entry stays
+   bottom-right. Still audio-only. `--test-audio-settings=<s>` delays the diagnostic
+   capture so it can be taken in-game.
+2. Combat hitches (`a10e4b6`). A local crowded-battle harness (below) showed build
+   1052's single-call bone poses sending collapsed/coplanar transforms (dismembered or
+   flattened parts) to `Skeleton3D.SetBonePose`. Godot failed `is_rotation`, logged an
+   error with a C# backtrace and used identity rotation: ~1,600 errors per 85 s battle.
+   Degenerate poses now use the original managed decomposition. `Materials.Get` reuses
+   cached parameter `StringName`s (13 allocations + tracked disposables per refresh).
+3. AA policy (`fd6d368`). If measured main-thread CPU alone is >= 85% of the frame
+   budget, overload no longer removes 2x MSAA (it cannot help) and, after that CPU-bound
+   fallback, MSAA stays on at 60 FPS. Overload with CPU headroom keeps the old order.
+   A user-selected 60 FPS target and `--graphics=original` keep MSAA off. Log line:
+   `load: CPU-bound (x ms of y ms); keeping 2x MSAA`.
+
+Evidence (local x86 VM, NOT phone): full suite passes (94 runtime checks, 16 audio UI
+checks incl. touch/Escape/Back, persistence restarts, 19 patched-behaviour checks). The
+pinned port patches on arm64 and x86_64 (69/69 checks each), double patch refused. Real
+port rendered Options, in-game modal and a crowded battle; no native errors besides the
+VM's missing ALSA device. Headless crowded-battle A/B (3 interleaved runs each, 40
+Farmers vs wave 12, 51 alive): worst frame per 5 s window median 52 -> 12 ms (worst
+88 -> 16.7 ms), missed 120 Hz frames 0.93% -> 0.17%, main-thread CPU median 4.80 ->
+4.61 ms, render sync 3.08 -> 2.87 ms. Desktop GodotSharp is a MinOpt build, so interop
+shares are inflated relative to Android. No phone FPS claim.
+
+Remaining profile (crowded battle, main thread): Render.Sync 44% (skinning 19%,
+MeshCache particle rebuild 13%), AnimationSystem 23% (curve evaluation). These are the
+next CPU targets; they need IL-level changes in the port's render/animation bridge.
+
+Private build 1053 (`apk-r53-a72d11ef6f9c`, engine a72d11e): patched, signed, verified;
+emulator smoke PASS. Android loaded the original menu art; the emulator battle logged
+`load: CPU-bound (13.6 ms of 8.3 ms); keeping 2x MSAA` (software emulator, not phone
+evidence); zero `must be normalized` lines in the logcat tails. That smoke battle still
+enters InGame directly (blue tutorial, zero kills), so it is not combat evidence.
+
+Phone checks for this build: audio menu look and touch comfort; Options/pause entries;
+Back/Escape; settings persistence; crowded battle FPS overlay (CPU, render sync, AA);
+whether the `CPU-bound` log appears and AA stays 2x after fallback; dismemberment and
+flattened deaths look as before 1052; any `must be normalized` lines in logcat.
+
+Local harness method (not committed; reflection only, never shipped): build a variant of
+SvzEnhanced with a `[ModuleInitializer]` that, when `SVZ_HARNESS=<wave>` is set, sets
+the profile's wave levels and waveToBeat, unlocks helpers, calls
+`Svz.SceneManager.Request(2)`, then in `InGameImpl` keeps `mAllAlliesInvincibleTimer`
+high and calls `Smithy.ForceSpawn("Farmer")` up to `SVZ_ALLIES`. Profile with
+`perf record -g` plus `DOTNET_PerfMapEnabled=1 DOTNET_EnableWriteXorExecute=0`.
+
+---
+
+# World graphics and material-sync continuation: 2026-11-26
+
+Owner requested graphics enhancement and better combat performance together.
+Original characters, artwork and accepted GUI/font rendering remain the baseline.
+No graphics settings were added to the audio-only menu.
+
+WorldGraphics restores mipmaps and enables anisotropic sampling for opaque 3D
+main/secondary textures. Transparent, cutout, particle/additive shaders, GUI text
+and lightmaps keep their prior sampling path. The source Image is duplicated
+before mip generation because GetImage can return shared image data. Original
+base pixels and source texture state remain unchanged. Extra RGBA mip textures
+are limited to 1024 per dimension and a cumulative conservative 24 MiB budget.
+The local game-world render prepared 16 textures using 9,961,488 bytes (~9.5 MiB).
+Camera filtering uses 4x anisotropy, reducing to 2x with the existing load budget.
+`--test-legacy-textures` compares old texture sampling while retaining the same
+AA and material-cache path. This improves sampling, not authored texture detail.
+
+Combat path: material override assignments now cache per node, surface and mesh
+revision rather than making a native GetSurfaceOverrideMaterial call every frame.
+MeshCache.ClearSurfaces bumps a weak per-mesh revision; rebuilt particle meshes,
+replacement meshes and changed materials still receive an override immediately.
+All source material-parameter temporaries are disposed after Godot has copied
+them, avoiding finalizer backlog. The cache is for bridge-owned state only.
+
+Validation: complete suite passes, including 84 primary real-Godot runtime checks,
+11 audio interaction/Back checks, two audio process-restart checks and 19 patched
+behavior checks. New checks cover opaque shader selection, effect exclusions,
+original texture immutability, mip/cache bounds, changed materials and dynamic
+mesh rebuilds. Exact pinned-port patching and helper resolution pass; both old
+and new world sampling render through MainMenu into InGame without shader errors.
+Local warmed median of five runs: 20,000 static material checks, 2.06 ms old vs
+0.52 ms cached. This is an interop microbenchmark, not a phone FPS claim. The
+local scene is a tutorial, not proof of crowded combat. Phone visual/performance
+acceptance remains required for the new APK.
+
+---
+
+# Audio settings continuation: 2026-11-26
+
+User requested a settings section, then explicitly deferred graphics settings
+until graphics enhancement is done. This pass adds AUDIO ONLY: master volume,
+music volume, sound effects volume and mute. No graphics/FPS controls were added.
+
+The existing Options screen gains an Audio settings button; About, Credits,
+Privacy and the original Back button remain. The pause menu gains Settings.
+Closing the modal returns to that same screen/pause menu. The native overlay
+scales with the viewport, pauses the scene tree and preserves any previous pause
+state. Android Back and Escape close it. Restore QuitOnGoBack only after the current
+Window Back event completes, since its notification precedes its auto-quit signal. Current and pending game input is cleared
+on open/close so touches cannot leak into movement or menu actions.
+
+Audio is routed through an owned master bus with separate Music/Effects children,
+leaving legacy AudioListener bus gain/mute and per-source fades intact. Exported
+music clips use the BGM_ prefix; looping enemy ambience remains Effects. Settings
+are stored in user://svz_audio.cfg, independently of profile/progress saves.
+Cutscene audio also routes through the owned master bus.
+Zero volume mutes its bus exactly; corrupt and out-of-range preferences recover.
+
+Validation: full suite passes: 72 primary Godot runtime checks, eleven real-touch/keyboard
+UI interaction checks, two checks in a separate process for persistence, the
+existing bridge/restart checks, and 19 patched-behavior checks including held and
+pending input reset. The exact pinned port passes the new IL patch and helper
+resolution. A real Options render confirms the new entry fits without covering
+existing buttons. Native panel preview is legible; target-phone verification
+remains necessary. The settings entry lifecycle is patched into OptionsImpl and
+PauseMenu for the production binary route. Full-source integrations must also
+wire the PauseMenu entry's show/hide calls to the generated game class.
+
+---
+
+# Bone pose performance continuation: 2026-11-25
+
+Phone build 1047: 102 FPS with 2x AA in the reported busy battle; deliberate
+cheap-troop stress tests fell back after about 74 FPS with AA off. Stress scenes
+are explicitly beyond the user's usual troop load. CPU totals in those captures
+were 8.7-10.8 ms, with render sync 4.3-5.8 ms. These are different scenes and
+cannot establish an exact improvement ratio or minimum instantaneous FPS.
+
+Next pass replaces separate per-bone position/scale/rotation submissions with
+one `Skeleton3D.SetBonePose` call, caching exact duplicate poses by skeleton and
+bone index. Bone data/animation frequency and character designs are retained.
+The original transform remains passed by reference to avoid an extra managed
+copy. The IL patch checks the decomposition shape and refuses unexpected branch
+entries or exception boundaries before replacing that block.
+
+Validation: full suite passed, including 55 Godot runtime checks and 18 patched
+behavior checks. Pose equivalence covers rotations, nonuniform scales, reflected
+and sheared bases, unchanged poses and subpixel movement. Local headless benchmark
+of 20,000 changing bone updates (five runs, warmed, median) measured previous
+path 15.45 ms versus single-call path 3.39 ms. This is a bone-update microbenchmark,
+not a whole-game or phone speedup. The exact pinned real port passes patch checks
+and helper resolution, and renders an animated game world through MainMenu.
+The next private APK and target-phone performance acceptance remain required.
+
+---
+
+# Graphics and performance continuation: 2026-11-25
+
+Accepted phone baseline: engine `3ed660b7aef8962c87f629d6e795cca1f8ea514d`
+(private build 1046). User confirmed the font rendering is perfect. The Shop
+screenshot reports 120 FPS. The subsequent combat screenshot reports fallback
+from roughly 70 FPS to 60; sustained 120 FPS combat is NOT accepted yet.
+Preserve the original characters, accepted font rendering and single existing
+hold gesture. Do not treat Store FPS or a tutorial scene as crowded combat proof.
+
+Current pass adds adaptive 2x MSAA only to camera SubViewports (not the GUI),
+and skips unchanged bridge-owned visibility, layers, shadow mode, transforms,
+viewport sizes and bone scales. Cache keys are weak node identities; exact value
+comparisons preserve subpixel movement and changing poses. These helpers must
+not be used on state another system writes. Mesh/skeleton replacement gets a
+fresh cache via its new Godot object. Bone positions/rotations remain live.
+
+Remove optional MSAA and retry the selected target once before dropping to
+60 FPS. New-level loads reset that quality budget. Existing frame pacing,
+120 ceiling and persistent settings are retained. `--graphics=original` gives
+an A/B rendering baseline without another touch gesture. The existing diagnostic
+FPS overlay now includes CPU process/render-sync time and AA state. CPU times
+exclude asynchronous GPU rendering and are not GPU measurements.
+
+Local validation uses the exact pinned port APK and real Godot 4.7.2 runtime.
+Entering through MainMenu and pressing Start creates a valid game world; loading
+InGame directly previously missed initialization and produced a blue tutorial.
+A fresh-profile tutorial is useful for visual comparisons but does not validate
+crowded combat or sustained phone FPS. Never publish game images/assets/APKs
+in the public repository. Phone verification of this graphics pass remains open.
+
+---
+
+# Latest acceptance work: 2026-11-25
+
+Draft PR: https://github.com/Danttedaa/svz/pull/25
+
+Engine code `6d9980eca17bc8ba1b066059dafc07d7dcdd5322` passed the hosted
+Tests workflow (run 45647488346): Python/tool checks, 42 pacing policy assertions,
+10090 corpse cases, 70 font assertions, 9 snapshot checks, Godot runtime/bridge/
+restart tests, and 18 patched-behavior checks. Android acceptance is separate.
+
+Build 42 failed during Android activity recreation. Its log shows OnPause,
+OnStop, engine destruction, reuse of an initialized fragment and force quit;
+this is not evidence of a managed game-code exception. The next smoke version
+sets a stable landscape orientation and display size before first launch, and
+stops the activity before subsequent size changes. Fresh-install diagnostic
+stages run independently while retaining all prior failures.
+
+The coding executor became unavailable during this continuation. GitHub changes
+and hosted checks remain usable. The private repository now has a
+`Review emulator diagnostics` workflow that exposes image previews only inside
+private job logs after each build. It downloads only the private smoke artifact;
+it neither executes artifact contents nor handles APKs or signing keys.
+
+Completion must not be claimed yet: valid native/HD text images, a nonzero
+crowded-battle/death workload, target-phone acceptance and the legacy OnGUI/
+Pachinko scope still need resolution. See RESTORATION_TOOLKIT.md for reusable
+components and verification boundaries.
+
+---
+
+# Renderer blocker identified: 2026-11-25
+
+Build 41 / run 45630730319 / artifact 15031318728 proves the blank images
+are actual blank Godot frames (sampledColors=1), not Android overlays. Both
+SceneShaderGLES3 and CanvasShaderGLES3 fail linking with:
+`Fragment shader active uniforms exceed GL_MAX_FRAGMENT_UNIFORM_VECTORS (261)`.
+The active renderer is the old emulator SwiftShader 4.0.0.1 GLES translator.
+Android window focus is the game, no obscuring window, power Awake.
+
+M28 changes the private emulator GPU from deprecated `swiftshader_indirect`
+to `swangle` (SwiftShader through ANGLE). No phone-renderer or font changes.
+Shader-link failures now explicitly fail smoke even if the app stays alive.
+Next: inspect the new private diagnostics artifact; require real Store images
+before evaluating native 768 versus original-HD 1536. Build 41 remains unverified.
+
+---
+
+# Current continuation: 2026-11-25
+
+Branch: `enhanced/m27-native-font-baseline`. Preserve original designs, 120 FPS
+ceiling, accepted combat fixes, and exactly one two-finger text toggle.
+
+Private build 39 (`3c66e46292f6`, run 45594557562) remained alive and exercised
+Store original, original-HD, native-768 baseline, and battle. Font logs verified
+768/1536 selection and actual prefiltered glyph draws. Smoke correctly failed:
+Android screencaps were only 1598/5338 bytes; no valid visual comparison yet.
+Battle reported zero kills, so that run does not prove crowded-wave/death behavior.
+
+Next diagnostic build adds `--test-capture-frame=<path>` only to emulator APK
+variants. It captures the Godot viewport after drawing at 20 seconds, keeps the
+app running, and logs dimensions plus sampled color count. The normal APK has no
+capture argument. `viewport-*.png` complements, and does not override, Android
+screen verification. Blank-screen failures now log focus/surface/power summaries.
+
+Private workflow must publish `emulator-diagnostics` with smoke PNGs and text only,
+7-day retention. APKs, inputs and keys must never be workflow artifacts. Retrieve
+this artifact through the GitHub connector to inspect frames without browser auth.
+Compare viewport and Android screenshots before changing font rendering again.
+
+Local verification: Python 61 passed / 1 skipped; policy 42 passed; corpse safety
+10090 cases; font policy 70 assertions; snapshots 9; binary-patch behavior 18 checks.
+Godot runtime, bridge and restart tests passed; the new capture callback compiles.
+Android capture itself still needs the private emulator run.
+
+---
+
+# Historical handoff (superseded by the continuation above)
+
 # SvZ Enhanced: handoff (2026-11-23, evening)
 
 For whoever continues this work (human or another AI assistant). Game files, decompiled game code, game

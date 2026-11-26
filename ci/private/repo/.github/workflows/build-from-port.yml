@@ -175,8 +175,20 @@ jobs:
           target: google_apis
           disk-size: 6000M
           ram-size: 4096M
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swangle -no-snapshot -noaudio -no-boot-anim
           script: bash engine/tools/binpatch/emulator_smoke.sh "${{ steps.build.outputs.apk }}" "${{ steps.cfg.outputs.package }}" "${{ runner.temp }}/smoke"
+
+      - name: Archive emulator diagnostics
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-diagnostics
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/smoke/screenshot*.png
+            ${{ runner.temp }}/smoke/viewport-*.png
+            ${{ runner.temp }}/smoke/*.txt
 
       - name: Publish to this private repository
         if: steps.build.outcome == 'success'

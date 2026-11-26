@@ -32,6 +32,14 @@ namespace Svz
 		public const float DefaultTextScale = 1.0f;
 		public const float MinTextScale = 0.8f, MaxTextScale = 1.5f;
 
+		private static bool NativeBaselineRequested()
+		{
+			// Keep the policy independently testable without loading Godot.
+			var os = Type.GetType("Godot.OS, GodotSharp");
+			var method = os?.GetMethod("GetCmdlineUserArgs", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+			return method?.Invoke(null, null) is string[] args && Array.IndexOf(args, "--test-native-font-baseline") >= 0;
+		}
+
 		public static string SelectResolution(List<int> supported, int screenHeight)
 		{
 			if (supported == null || supported.Count == 0)
@@ -44,9 +52,13 @@ namespace Svz
 				int diff = Math.Abs(screenHeight - candidate);
 				if (diff < distance) { distance = diff; closest = candidate; }
 			}
-			int chosen = screenHeight >= 700 && screenHeight <= 1536 && supported.Contains(1536) ? 1536 : closest;
+			// Diagnostic startup override: restore the port's native font selection
+			// without changing normal builds or saved player settings.
+			bool nativeBaseline = NativeBaselineRequested();
+			int chosen = !nativeBaseline && screenHeight >= 700 && screenHeight <= 1536 && supported.Contains(1536) ? 1536 : closest;
 			NearestResolution = closest;
 			SelectedResolution = chosen;
+			if (nativeBaseline) Console.WriteLine($"[svz-ui] native font baseline: nearest={closest} selected={chosen}");
 			return chosen.ToString(CultureInfo.InvariantCulture);
 		}
 

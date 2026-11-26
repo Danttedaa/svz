@@ -13,10 +13,10 @@ namespace Svz
 	/// - Frame-rate target from user://svz_enhanced.cfg (default 120), VSync always on.
 	/// - Android 15+ keeps games at 60 Hz unless they ask for more, and Godot 4.7 does not ask:
 	///   this calls Surface.setFrameRate() on Godot's render surface through the AndroidRuntime bridge.
-	/// - When the display runs at the target rate, VSync alone paces frames (no sleep limiter).
+	/// - Explicit engine limit <=120 FPS even when VSync/display are at 120 Hz.
 	/// - Optional one-way fallback (default 120 -> 60) when the target cannot be held (FallbackMonitor).
-	/// - In-game toggles without touching the game's menus: hold 4 fingers for 1.5 s to switch
-	///   120 <-> 60 FPS, hold 5 fingers for 1.5 s to show/hide the FPS readout.
+	/// - Fixed 120 FPS target by default; FPS and overlay changes are config/CLI-only,
+	///   not hidden multi-finger gestures. The only phone gesture is the text A/B toggle.
 	/// - Log lines start with "[svz-fps]" (adb logcat -s godot).
 	public static class FramePacing
 	{
@@ -39,12 +39,14 @@ namespace Svz
 		public static void Notify(string text) => sNotify?.Invoke(text);
 
 		private static Node sRoot;
+		// Enabled only in packaged diagnostic variants; never persisted in player settings.
+		private static string sCapturePath;
+		private static bool sCaptureQueued;
+		private static double sCaptureRemaining = -1;
 		private static Action<string> sNotify;
 		private static FallbackMonitor sMonitor;
 		private static bool sFallenBack;
 		private static string sFallbackReport = "";
-		private static readonly HoldGesture sToggleFps = new HoldGesture(4, 1.5);
-		private static readonly HoldGesture sToggleOverlay = new HoldGesture(5, 1.5);
 		private static double sRecheckIn = -1, sPeriodic;
 		private static int sGameRequested = int.MinValue;
 		private static Label sOverlay;
@@ -54,6 +56,11 @@ namespace Svz
 		public static void Init(Node root, Action<string> notify)
 		{
 			sRoot = root;
+			RenderQuality.ResetBudget();
+			if (sCaptureQueued) RenderingServer.FramePostDraw -= CaptureDiagnosticFrame;
+			sCaptureQueued = false;
+			sCapturePath = null;
+			sCaptureRemaining = -1;
 			sNotify = notify;
 			Settings = Load();
 			foreach (var a in OS.GetCmdlineUserArgs())
@@ -62,12 +69,18 @@ namespace Svz
 					Settings.TargetFps = FrameSettings.Sanitize(f, Settings.TargetFps);
 				if (a == "--show-fps") Settings.ShowFps = true;
 				if (a == "--no-fallback") Settings.AutoFallback = false;
+				if (a.StartsWith("--test-capture-frame=", StringComparison.Ordinal))
+				{
+					sCapturePath = a.Substring("--test-capture-frame=".Length);
+					if (!string.IsNullOrWhiteSpace(sCapturePath)) sCaptureRemaining = 20;
+				}
 			}
 			DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Enabled);
 			sMonitor = new FallbackMonitor(Settings.TargetFps);
 			Log($"settings: target={Settings.TargetFps} fallback={(Settings.FallbackEnabled ? Settings.FallbackFps.ToString(CultureInfo.InvariantCulture) : "off")} requestDisplayRate={Settings.RequestDisplayRate}");
 			Apply("init");
 			SetOverlay(Settings.ShowFps);
+			GameSettings.Init(root);
 		}
 
 		/// Unity's Application.targetFrameRate setter lands here. The player's setting wins; the
@@ -85,32 +98,66 @@ namespace Svz
 			if (sRoot == null) return;
 			if (Settings.FallbackEnabled && !sFallenBack && sMonitor.Feed(delta))
 			{
-				// Capture the panel rate and measured load BEFORE switching to fallback:
-				// after the switch, the overlay would otherwise report only stable 60Hz.
-				sFallbackReport = string.Format(CultureInfo.InvariantCulture,
-					"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
-					sMonitor.LastWindow, DisplayHz);
-				sFallenBack = true;
-				Log("fallback reason: " + sFallbackReport);
-				Apply("fallback");
-				sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
-			}
-			if (sToggleFps.Update(touchCount, delta))
-			{
-				SetTargetFps(Settings.TargetFps >= 120 ? 60 : 120, "toggle");
-				sNotify?.Invoke($"Frame rate: {Settings.TargetFps} FPS");
-			}
-			if (sToggleOverlay.Update(touchCount, delta))
-			{
-				Settings.ShowFps = !Settings.ShowFps;
-				Save();
-				SetOverlay(Settings.ShowFps);
+				// Remove optional GPU work and retry the selected target once before
+				// lowering the frame-rate target.
+				if (RenderQuality.ReduceCostBeforeFallback(Settings.TargetFps))
+				{
+					sMonitor.Retarget(Settings.TargetFps);
+					Log("load: disabled 2x MSAA; retrying selected FPS before fallback");
+				}
+				else
+				{
+					// Capture the panel rate and measured load BEFORE switching to fallback.
+					sFallbackReport = string.Format(CultureInfo.InvariantCulture,
+						"from {0}: {1}, panel {2:0}Hz", Settings.TargetFps,
+						sMonitor.LastWindow, DisplayHz);
+					sFallenBack = true;
+					if (RenderQuality.KeepAaAfterFallback)
+						Log(string.Format(CultureInfo.InvariantCulture,
+							"load: CPU-bound ({0:0.0} ms of {1:0.0} ms); keeping 2x MSAA, which cannot restore the target",
+							RenderQuality.CpuAverageMs, 1000.0 / Settings.TargetFps));
+					Log("fallback reason: " + sFallbackReport);
+					Apply("fallback");
+					sNotify?.Invoke($"{Settings.FallbackFps} FPS (target {Settings.TargetFps} not held)");
+				}
 			}
 			if (sRecheckIn > 0 && (sRecheckIn -= delta) <= 0) Recheck("after request");
 			if ((sPeriodic += delta) >= 5.0) { sPeriodic = 0; Recheck(null); }
-			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz)) Log(sStats.Last);
+			if (Settings.LogStats && sStats.Add(delta, EffectiveFps, DisplayHz))
+			{ Log(sStats.Last); Log(RenderQuality.Diagnostics()); }
 			UpdateOverlay(delta);
+			if (sCaptureRemaining > 0 && (sCaptureRemaining -= delta) <= 0)
+			{
+				sCaptureQueued = true;
+				RenderingServer.FramePostDraw += CaptureDiagnosticFrame;
+			}
 			AfterFrame?.Invoke(delta, touchCount);
+		}
+
+		// Capture the actual rendered viewport after the draw completes, independently
+		// of Android's screen compositor. Keep the app running for the normal liveness test.
+		private static void CaptureDiagnosticFrame()
+		{
+			RenderingServer.FramePostDraw -= CaptureDiagnosticFrame;
+			sCaptureQueued = false;
+			try
+			{
+				using var image = sRoot.GetViewport().GetTexture().GetImage();
+				if (image == null || image.IsEmpty()) { Log("diagnostic capture: empty viewport"); return; }
+				string path = ProjectSettings.GlobalizePath(sCapturePath);
+				string dir = System.IO.Path.GetDirectoryName(path);
+				var mkdir = DirAccess.MakeDirRecursiveAbsolute(dir);
+				if (mkdir != Error.Ok && mkdir != Error.AlreadyExists)
+				{ Log($"diagnostic capture: directory failed: {mkdir}"); return; }
+				var result = image.SavePng(path);
+				var colors = new HashSet<uint>();
+				int width = image.GetWidth(), height = image.GetHeight();
+				for (int y = 0; y < height; y += Math.Max(1, height / 64))
+					for (int x = 0; x < width; x += Math.Max(1, width / 64))
+						colors.Add(image.GetPixel(x, y).ToRgba32());
+				Log($"diagnostic capture: {result}, {width}x{height}, sampledColors={colors.Count}, {path}");
+			}
+			catch (Exception e) { Log("diagnostic capture failed: " + e.Message); }
 		}
 
 		/// Change the saved frame-rate target (for menus and tools); clears a session fallback.
@@ -125,12 +172,30 @@ namespace Svz
 			Apply(why);
 		}
 
-		/// After a level load: loading hitches must not count against the frame-rate target.
-		public static void OnLevelLoaded() => sMonitor?.Reset();
+		/// After loading a new level, try the selected target again if a previous
+		/// crowded wave forced fallback. Never probe mid-wave, so a sustained
+		/// overload does not cause repeated 120/60 Hz switching.
+		public static void OnLevelLoaded()
+		{
+			RenderQuality.ResetBudget();
+			if (!sFallenBack || sRoot == null)
+			{
+				sMonitor?.Reset(); // ignore loading hitches during an ordinary level change
+				return;
+			}
+			// Reset() alone does not clear FallbackMonitor.Triggered; use Retarget()
+			// so an overloaded new wave can safely fall back again.
+			sMonitor?.Retarget(Settings.TargetFps);
+			sFallenBack = false;
+			sFallbackReport = "";
+			Apply("new level retry");
+			Log($"new level: restored {Settings.TargetFps} FPS target after previous fallback");
+		}
 
 		/// Main._Notification forwards every notification here (used by the binary patch, tools/binpatch).
 		public static void OnNotification(int what)
 		{
+			GameSettings.OnNotification(what);
 			if (what == (int)MainLoop.NotificationApplicationResumed) OnResume();
 		}
 
@@ -155,7 +220,7 @@ namespace Svz
 			}
 		}
 
-		/// Re-read the display rate and switch between VSync pacing and the software limiter if it changed
+		/// Re-read the display rate and update pacing to match the panel while retaining the hard cap
 		/// (the system may refuse the request, or lower the rate later for power or heat).
 		private static void Recheck(string why)
 		{
@@ -260,13 +325,20 @@ namespace Svz
 			return null;
 		}
 
-		/// OS.GetVersion() is Build.VERSION.RELEASE on Android ("17", "11", "8.1.0").
-		private static int AndroidApiLevel()
+		// Godot reports the Android SDK level plus an optional incremental build
+		// suffix, not the marketed Android release. Treat unknown/custom-ROM
+		// strings conservatively instead of inventing an API level.
+		private static int AndroidApiLevel() => ParseAndroidSdkVersion(OS.GetVersion());
+
+		public static int ParseAndroidSdkVersion(string version)
 		{
-			string v = OS.GetVersion();
-			int dot = v.IndexOf('.');
-			if (!int.TryParse(dot >= 0 ? v.Substring(0, dot) : v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int major)) return 0;
-			return AndroidApiForRelease(major);
+			if (string.IsNullOrWhiteSpace(version)) return 0;
+			string value = version.Trim();
+			int end = 0;
+			while (end < value.Length && value[end] >= '0' && value[end] <= '9') end++;
+			if (end == 0 || (end < value.Length && value[end] != '.' && !char.IsWhiteSpace(value[end]))) return 0;
+			return int.TryParse(value.AsSpan(0, end), NumberStyles.None,
+				CultureInfo.InvariantCulture, out int sdk) && sdk > 0 ? sdk : 0;
 		}
 
 		/// Lowest API level of an Android major release (11 -> 30, 12 -> 31, ...); releases after 12L add one level each.
@@ -336,6 +408,9 @@ namespace Svz
 			// immediately before fallback. Shown only when the FPS overlay is enabled.
 			if (sFallenBack && !string.IsNullOrEmpty(sFallbackReport))
 				sOverlay.Text += "\nFallback " + sFallbackReport;
+            sOverlay.Text += string.Format(CultureInfo.InvariantCulture,
+                "\nCPU {0:0.0} ms  render sync {1:0.0} ms  AA {2}",
+                RenderQuality.LastFrameMs, RenderQuality.LastRenderMs, RenderQuality.AaStatus);
 		}
 
 		private static void Log(string msg) => GD.Print("[svz-fps] " + msg);

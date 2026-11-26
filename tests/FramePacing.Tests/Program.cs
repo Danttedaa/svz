@@ -32,9 +32,11 @@ internal static class Program
 	private static void Decide()
 	{
 		var d = FramePacingPolicy.Decide(120, 120.0, true);
-		Check(d.EngineMaxFps == 0 && d.VsyncPaced && d.RequestHz == 120f, "120 on 120 Hz: VSync paced, no limiter");
+		Check(d.EngineMaxFps == 120 && d.VsyncPaced && d.RequestHz == 120f, "120 on 120 Hz: VSync with a hard 120 FPS cap");
 		d = FramePacingPolicy.Decide(120, 119.88, true);
-		Check(d.VsyncPaced, "119.88 Hz counts as 120");
+		Check(d.VsyncPaced && d.EngineMaxFps == 120, "119.88 Hz counts as 120 while cap remains 120");
+		d = FramePacingPolicy.Decide(240, 240.0, true);
+		Check(d.EngineMaxFps == 120 && d.RequestHz == 120f && !d.VsyncPaced, "caller requesting 240 cannot bypass the 120 cap");
 		d = FramePacingPolicy.Decide(120, 60.0, true);
 		Check(d.EngineMaxFps == 120 && !d.VsyncPaced && d.RequestHz == 120f, "120 on 60 Hz: limiter on, request 120");
 		d = FramePacingPolicy.Decide(60, 120.0, true);
@@ -91,6 +93,16 @@ internal static class Program
 		bool fired = false;
 		for (int i = 0; i < 120 * 60; i++) fired |= m.Feed(1.0 / 120);
 		Check(!fired, "steady 120 FPS does not fall back");
+
+		// Reproduces the S25 Ultra report: ~86.6 FPS with ~1% long (>12.5ms)
+		// frames. The previous 80%-of-target threshold forced a 60 FPS cap even
+		// though the screen was still delivering substantially more than 60.
+		m = new FallbackMonitor(120);
+		fired = false;
+		for (int i = 0; i < 87 * 60; i++)
+			fired |= m.Feed(i % 100 == 0 ? 1.0 / 60 : 1.0 / 87);
+		Check(!fired, "~87 FPS with 1% long frames does not hard-lock to 60");
+		Check(!m.Triggered, "moderate crowd slowdown leaves 120 target active");
 
 		// steady 60 FPS while targeting 120: triggers after grace (10 s) + 2 windows (10 s)
 		m = new FallbackMonitor(120);

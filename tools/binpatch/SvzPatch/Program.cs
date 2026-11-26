@@ -77,6 +77,23 @@ internal static class Program
 		Expect(fp, "GameRequested", "::GameRequested(System.Int32)");
 		Expect(fp, "get_EffectiveFps", "::get_EffectiveFps()");
 		Expect(pol, "SmoothDeltaTime", "::SmoothDeltaTime(System.Single,System.Single)");
+		var particleReuse = enhanced.GetType("Svz.ParticleArrayReuse") ?? throw new PatchException("ParticleArrayReuse missing");
+		Require(particleReuse.Methods.Any(x => x.Name == "Reuse" && x.IsPublic && x.IsStatic &&
+			x.GenericParameters.Count == 1 && x.Parameters.Count == 2 &&
+			x.Parameters[0].ParameterType.FullName == "System.Int32"),
+			"ParticleArrayReuse.Reuse<T>(int,T[]) missing");
+		Require(particleReuse.Methods.Any(x => x.Name == "ReuseIndices" && x.IsPublic && x.IsStatic &&
+			x.Parameters.Count == 2 && x.ReturnType.FullName == "System.Int32[]" &&
+			x.Parameters[0].ParameterType.FullName == "System.Int32" &&
+			x.Parameters[1].ParameterType.FullName == "System.Collections.Generic.List`1<System.Int32[]>"),
+			"ParticleArrayReuse.ReuseIndices(int,List<int[]>) missing");
+		var readable = enhanced.GetType("Svz.UiReadableText") ?? throw new PatchException("UiReadableText missing");
+		Require(readable.Methods.Any(x => x.Name == "TryDraw" && x.IsPublic && x.IsStatic &&
+			x.ReturnType.FullName == "System.Boolean" && x.Parameters.Count == 3 &&
+			x.Parameters[0].ParameterType.FullName == "Godot.CanvasItem" &&
+			x.Parameters[1].ParameterType.FullName == "System.Object" &&
+			x.Parameters[2].ParameterType.FullName == "System.Single"),
+			"UiReadableText.TryDraw(CanvasItem,object,float) missing");
 		var victory = enhanced.GetType("Svz.VictoryTiming") ?? throw new PatchException("Svz.VictoryTiming missing in SvzEnhanced.dll");
 		var victoryMethod = victory.Methods.SingleOrDefault(x => x.Name == "WaitAfterWin" && x.IsPublic && x.IsStatic &&
 			x.Parameters.Count == 2 && x.Parameters[0].ParameterType.FullName == "System.Single" &&
@@ -238,14 +255,63 @@ internal static class Program
 		var uiTextRef = new TypeReference("Svz", "UiText", module, asmRef);
 		PatchFontLoad(module, M(uiTextRef, "PrepareFont", ts.Void, ts.Object));
 		PatchTextHalo(module, uiTextRef);
+		PatchNativeSmallText(module, new TypeReference("Svz", "UiReadableText", module, asmRef));
+		PatchAudioSettings(module, new TypeReference("Svz", "GameSettings", module, asmRef));
+		PatchRenderQuality(module, new TypeReference("Svz", "RenderQuality", module, asmRef));
+        PatchWorldRendering(module, new TypeReference("Svz", "WorldGraphics", module, asmRef), new TypeReference("Svz", "RenderQuality", module, asmRef));
 		PatchPerFrameLookups(module, new TypeReference("Svz", "Reuse", module, asmRef));
 		PatchMeshInterop(module, new TypeReference("Svz", "MeshArrays", module, asmRef));
+		PatchParticleArrayReuse(module, new TypeReference("Svz", "ParticleArrayReuse", module, asmRef));
+		SuppressLegacyRateMePrompt(module);
 
 		module.Write(output);
 		Console.WriteLine($"patched {input} -> {output}");
 		if (!Check(output)) throw new PatchException("patched file does not pass the check");
 	}
 
+
+
+	// The original game presents an obsolete incentivized market-rating dialog
+	// at fixed victory waves. Suppress ONLY its platform-type branches within
+	// DebriefingImpl.DisplayStats; leave achievements, coins, new unlocks and
+	// saved profile state untouched. The rating flag is not written to the save.
+	private static void SuppressLegacyRateMePrompt(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		var body = m.Body;
+		body.SimplifyMacros();
+		Require(body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "debrief_victory") &&
+			body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "CoinsGained"),
+			"rating branch must be in debrief stats with victory and coin award logic");
+		var expected = new[] { "amazon", "google" };
+		var matches = body.Instructions.Where(i => Calls(i, "ApplicationUtilities", "IsBuildType")).ToArray();
+		Require(matches.Length == expected.Length,
+			"exactly the amazon and google store-rating checks in DebriefingImpl.DisplayStats");
+		var sources = matches.Select(i => i.Previous?.OpCode == OpCodes.Ldstr ? i.Previous.Operand as string : null).ToArray();
+		Require(sources.SequenceEqual(expected), "rating checks must use literal amazon, google in order");
+		var il = body.GetILProcessor();
+		foreach (var call in matches)
+		{
+			// Original stack: [buildTypeString]; Pop consumes it, Ldc_I4_0
+			// supplies the false result expected by the original branch instruction.
+			call.OpCode = OpCodes.Pop;
+			call.Operand = null;
+			il.InsertAfter(call, il.Create(OpCodes.Ldc_I4_0));
+		}
+		body.OptimizeMacros();
+		Require(LegacyRatingSuppressed(module), "obsolete rating popup not suppressed");
+	}
+
+	private static bool LegacyRatingSuppressed(ModuleDefinition module)
+	{
+		var m = Method(module, "DebriefingImpl", "DisplayStats", 0);
+		bool HasDisabledCheck(string buildType) => m.Body.Instructions.Any(i =>
+			i.OpCode == OpCodes.Ldstr && (i.Operand as string) == buildType &&
+			i.Next?.OpCode == OpCodes.Pop && i.Next.Next?.OpCode == OpCodes.Ldc_I4_0);
+		return HasDisabledCheck("amazon") && HasDisabledCheck("google") &&
+			!m.Body.Instructions.Any(i => Calls(i, "ApplicationUtilities", "IsBuildType")) &&
+			m.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (i.Operand as string) == "CoinsGained");
+	}
 
 	private static IEnumerable<TypeDefinition> Descendants(IEnumerable<TypeDefinition> types)
 	{
@@ -549,14 +615,19 @@ internal static class Program
 		Require(a0 != null && a0.OpCode == OpCodes.Ldarg && a0.Operand == draw.ThisParameter && IsLoad(a1) && IsLoad(a2),
 			"GuiCanvas._Draw: DrawText(this, local text, sh)");
 		var il = draw.GetILProcessor();
-		// keep a0 as the branch target: it becomes BeginHaloPass, then a duplicate call, EndHaloPass, the original call
-		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
+		// When the optional outline is OFF, skip the entire extra DrawText traversal.
+		// Otherwise the first pass would draw the original glyphs and the second pass would
+		// draw them again, making letters look thicker and wasting GPU draw calls.
+		// Preserve a0 as the original branch target; conditional false jumps to the
+		// untouched regular DrawText invocation.
+		var begin = new MethodReference("BeginHaloPass", module.TypeSystem.Boolean, uiText) { HasThis = false };
 		var end = new MethodReference("EndHaloPass", module.TypeSystem.Void, uiText) { HasThis = false };
 		var origThis = il.Create(OpCodes.Ldarg, draw.ThisParameter);
 		var a1Op = a1.OpCode; var a1Arg = a1.Operand; var a2Op = a2.OpCode; var a2Arg = a2.Operand;
 		a0.OpCode = OpCodes.Call; a0.Operand = begin;
 		var seq = new[]
 		{
+			il.Create(OpCodes.Brfalse, origThis),
 			il.Create(OpCodes.Ldarg, draw.ThisParameter), Clone(il, a1Op, a1Arg), Clone(il, a2Op, a2Arg),
 			il.Create(OpCodes.Call, drawText), il.Create(OpCodes.Call, end), origThis,
 		};
@@ -585,6 +656,452 @@ internal static class Program
 				i.Operand is MethodReference r && r.Name == "DrawTextureRectRegion");
 	}
 
+
+	// The normal GUIText traversal remains the fallback. The final (non-halo)
+	// DrawText call becomes "try clean font; if unavailable, original DrawText".
+	// This skips each individual bitmap glyph draw when native text succeeds,
+	// with no duplicate pass, no text rewriting and no changes to art textures.
+	private static void PatchNativeSmallText(ModuleDefinition module, TypeReference helper)
+	{
+		var canvas = GuiCanvas(module);
+		var drawText = canvas.Methods.Single(m => m.Name == "DrawText" && m.Parameters.Count == 2);
+		var glyph = drawText.Body.Instructions.FirstOrDefault(i => Calls(i, "Svz.UiText", "DrawGlyph"));
+		var glyphCall = glyph?.Operand as MethodReference;
+		Require(glyphCall != null && glyphCall.Parameters.Count == 7,
+			"DrawText is already patched to UiText.DrawGlyph");
+		var draw = canvas.Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0).Body;
+		draw.SimplifyMacros();
+		var calls = draw.Instructions.Where(i => i.OpCode == OpCodes.Call &&
+			i.Operand is MethodReference r && r.Name == "DrawText" &&
+			r.DeclaringType.FullName == canvas.FullName).ToList();
+		Require(calls.Count == 2, "halo and regular DrawText calls must both exist");
+		var normalCall = calls[1];
+		var p2 = normalCall.Previous;
+		var p1 = p2?.Previous;
+		var p0 = p1?.Previous;
+		Require(p0 != null && p0.OpCode == OpCodes.Ldarg && p0.Operand == draw.ThisParameter &&
+			p1 != null && (p1.OpCode == OpCodes.Ldloc || p1.OpCode == OpCodes.Ldarg) &&
+			p2 != null && (p2.OpCode == OpCodes.Ldloc || p2.OpCode == OpCodes.Ldarg),
+			"the normal draw call keeps this,GUIText,screen-height on the IL stack");
+		var original = (MethodReference)normalCall.Operand;
+		var native = new MethodReference("TryDraw", module.TypeSystem.Boolean, helper) { HasThis = false };
+		native.Parameters.Add(new ParameterDefinition(glyphCall.Parameters[0].ParameterType));
+		native.Parameters.Add(new ParameterDefinition(module.TypeSystem.Object));
+		native.Parameters.Add(new ParameterDefinition(module.TypeSystem.Single));
+		var il = draw.GetILProcessor();
+		var after = normalCall.Next;
+		if (after == null) { after = il.Create(OpCodes.Nop); il.Append(after); }
+		normalCall.Operand = native;
+		var insert = new[]
+		{
+			il.Create(OpCodes.Brtrue, after),
+			il.Create(OpCodes.Ldarg, draw.ThisParameter),
+			Clone(il, p1.OpCode, p1.Operand),
+			Clone(il, p2.OpCode, p2.Operand),
+			il.Create(OpCodes.Call, original),
+		};
+		var at = normalCall;
+		foreach (var ins in insert) { il.InsertAfter(at, ins); at = ins; }
+		draw.OptimizeMacros();
+		Require(NativeSmallTextPatched(module), "clean readable font fallback not installed");
+	}
+
+	private static bool NativeSmallTextPatched(ModuleDefinition module)
+	{
+		var draw = GuiCanvas(module).Methods.Single(m => m.Name == "_Draw" && m.Parameters.Count == 0);
+		return draw.Body.Instructions.Count(i => Calls(i, "Svz.UiReadableText", "TryDraw") &&
+			i.Operand is MethodReference m && m.DeclaringType.Scope.Name == Enh) == 1 &&
+			draw.Body.Instructions.Any(i => (i.OpCode == OpCodes.Brtrue || i.OpCode == OpCodes.Brtrue_S) &&
+				i.Previous != null && Calls(i.Previous, "Svz.UiReadableText", "TryDraw"));
+	}
+
+	// Avoid allocating three new arrays for *every* particle renderer on *every*
+	// frame when its particle count has not changed. This patch preserves the
+	// original BuildMesh loop, UV generation, color calculations and geometry.
+	// All array elements are overwritten by BuildMesh before the Godot upload.
+	// Only the first Vector3, Vector2 and Color newarr call sites are targeted;
+	// the trailing empty normals array remains unchanged.
+	private static void PatchParticleArrayReuse(ModuleDefinition module, TypeReference helper)
+	{
+		var m = Method(module, "Svz.Particles", "BuildMesh", 2);
+		Require(m.ReturnType.FullName == "UnityEngine.Mesh", "BuildMesh returns a mesh");
+		var renderer = module.GetType("UnityEngine.ParticleRenderer") ?? throw new PatchException("ParticleRenderer missing");
+		var meshType = module.GetType("UnityEngine.Mesh") ?? throw new PatchException("Mesh missing");
+		Require(renderer.Fields.Any(x => x.Name == "__pmesh" && x.FieldType.FullName == meshType.FullName),
+			"ParticleRenderer owns a private mesh");
+		m.Body.SimplifyMacros();
+		var instructions = m.Body.Instructions;
+		var meshLoads = instructions.Where(i => i.OpCode == OpCodes.Ldfld && i.Operand is FieldReference fr &&
+			fr.Name == "__pmesh" && fr.DeclaringType.FullName == renderer.FullName).ToList();
+		Require(meshLoads.Count == 1 && meshLoads[0].Next?.OpCode == OpCodes.Stloc &&
+			meshLoads[0].Next.Operand is VariableDefinition,
+			"BuildMesh reads renderer.__pmesh into exactly one local");
+		var meshLocal = (VariableDefinition)meshLoads[0].Next.Operand;
+		var il = m.Body.GetILProcessor();
+		var kinds = new[]
+		{
+			("UnityEngine.Vector3", "__v"),
+			("UnityEngine.Vector2", "__uv"),
+			("UnityEngine.Color", "__c"),
+		};
+		int previousIndex = -1;
+		foreach (var (typeName, fieldName) in kinds)
+		{
+			var hits = instructions.Where(i => i.OpCode == OpCodes.Newarr &&
+				i.Operand is TypeReference t && t.FullName == typeName).ToList();
+			Require(hits.Count >= 1, "BuildMesh allocates a " + typeName + " buffer");
+			var allocation = hits[0];
+			int index = instructions.IndexOf(allocation);
+			Require(index > previousIndex, "BuildMesh arrays allocated in Vector3/Vector2/Color order");
+			previousIndex = index;
+			var member = meshType.Fields.SingleOrDefault(f => f.Name == fieldName &&
+				f.FieldType is ArrayType array && array.ElementType.FullName == typeName);
+			Require(member != null, "Mesh." + fieldName + " matches allocated element type");
+			var element = (TypeReference)allocation.Operand;
+			var open = new MethodReference("Reuse", module.TypeSystem.Void, helper) { HasThis = false };
+			var generic = new GenericParameter("T", open);
+			open.GenericParameters.Add(generic);
+			open.ReturnType = new ArrayType(generic);
+			open.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+			open.Parameters.Add(new ParameterDefinition(new ArrayType(generic)));
+			var instantiated = new GenericInstanceMethod(open);
+			instantiated.GenericArguments.Add(element);
+			// Original IL stack already contains the requested array length.
+			// Append this renderer's previous array before calling Reuse<T>.
+			il.InsertBefore(allocation, il.Create(OpCodes.Ldloc, meshLocal));
+			il.InsertBefore(allocation, il.Create(OpCodes.Ldfld, member));
+			allocation.OpCode = OpCodes.Call;
+			allocation.Operand = instantiated;
+		}
+		// Triangle indices are the fourth large allocation per emitter. A mesh
+		// has exactly one submesh in the original particle path, so use only
+		// that mesh's previous index array when its size still matches.
+		var indices = instructions.Where(i => i.OpCode == OpCodes.Newarr &&
+			i.Operand is TypeReference t && t.FullName == "System.Int32").ToList();
+		Require(indices.Count == 1 && instructions.IndexOf(indices[0]) > previousIndex,
+			"BuildMesh allocates exactly one triangle-index array after colors");
+		var submeshes = meshType.Fields.SingleOrDefault(f => f.Name == "__subs" &&
+			f.FieldType.FullName == "System.Collections.Generic.List`1<System.Int32[]>");
+		Require(submeshes != null, "Mesh.__subs is List<int[]>");
+		var reuseIndices = new MethodReference("ReuseIndices", new ArrayType(module.TypeSystem.Int32), helper)
+		{
+			HasThis = false
+		};
+		reuseIndices.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		reuseIndices.Parameters.Add(new ParameterDefinition(submeshes.FieldType));
+		il.InsertBefore(indices[0], il.Create(OpCodes.Ldloc, meshLocal));
+		il.InsertBefore(indices[0], il.Create(OpCodes.Ldfld, submeshes));
+		indices[0].OpCode = OpCodes.Call;
+		indices[0].Operand = reuseIndices;
+		m.Body.OptimizeMacros();
+		Require(ParticleArrayReusePatched(module), "particle vertex/index reuse hooks not installed");
+	}
+
+	private static bool ParticleArrayReusePatched(ModuleDefinition module)
+	{
+		var m = Method(module, "Svz.Particles", "BuildMesh", 2);
+		return m.Body.Instructions.Count(i => i.OpCode == OpCodes.Call &&
+			i.Operand is GenericInstanceMethod call && call.Name == "Reuse" &&
+			call.DeclaringType.FullName == "Svz.ParticleArrayReuse" &&
+			call.DeclaringType.Scope.Name == Enh) == 3 &&
+			m.Body.Instructions.Count(i => Calls(i, "Svz.ParticleArrayReuse", "ReuseIndices") &&
+				i.Operand is MethodReference r && r.DeclaringType.Scope.Name == Enh) == 1 &&
+			!m.Body.Instructions.Any(i => i.OpCode == OpCodes.Newarr &&
+				i.Operand is TypeReference t && t.FullName == "System.Int32");
+	}
+
+	private static void PatchAudioSettings(ModuleDefinition module, TypeReference helper)
+	{
+		MethodReference Hook(string name, TypeReference returns, params TypeReference[] parameters)
+		{
+			var method = new MethodReference(name, returns, helper) { HasThis = false };
+			foreach (var parameter in parameters) method.Parameters.Add(new ParameterDefinition(parameter));
+			return method;
+		}
+		var input = Method(module, "Svz.Main", "_Input", 1);
+		input.Body.SimplifyMacros();
+		var il = input.Body.GetILProcessor(); var first = input.Body.Instructions[0];
+		il.InsertBefore(first, il.Create(OpCodes.Ldarg_1));
+		il.InsertBefore(first, il.Create(OpCodes.Call, Hook("BlockGameInput", module.TypeSystem.Boolean, input.Parameters[0].ParameterType)));
+		il.InsertBefore(first, il.Create(OpCodes.Brfalse, first));
+		il.InsertBefore(first, il.Create(OpCodes.Ret)); input.Body.OptimizeMacros();
+
+		void AtReturns(MethodDefinition target, string hook, bool? flag = null)
+		{
+			target.Body.SimplifyMacros(); var processor = target.Body.GetILProcessor();
+			foreach (var ret in target.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+			{
+				if (flag.HasValue) { ret.OpCode = flag.Value ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0; ret.Operand = null;
+					var call = processor.Create(OpCodes.Call, Hook(hook, module.TypeSystem.Void, module.TypeSystem.Boolean));
+					processor.InsertAfter(ret, call); processor.InsertAfter(call, processor.Create(OpCodes.Ret)); }
+				else { ret.OpCode = OpCodes.Call; ret.Operand = Hook(hook, module.TypeSystem.Void);
+					processor.InsertAfter(ret, processor.Create(OpCodes.Ret)); }
+			}
+			target.Body.OptimizeMacros();
+		}
+		AtReturns(Method(module, "OptionsImpl", "Start", 0), "ShowOptionsEntry");
+        var optionsType = module.GetType("OptionsImpl");
+        var optionsUpdate = Method(module, "OptionsImpl", "Update", 0);
+        var about = optionsType.Fields.Single(f => f.Name == "mAboutDialog");
+        var confirm = optionsType.Fields.Single(f => f.Name == "mConfirmDialog");
+        optionsUpdate.Body.SimplifyMacros(); var oi = optionsUpdate.Body.GetILProcessor();
+        foreach (var ret in optionsUpdate.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+        {
+            ret.OpCode = OpCodes.Ldarg_0; ret.Operand = null;
+            var additions = new[] { oi.Create(OpCodes.Ldfld, about), oi.Create(OpCodes.Ldnull), oi.Create(OpCodes.Ceq),
+                oi.Create(OpCodes.Ldarg_0), oi.Create(OpCodes.Ldfld, confirm), oi.Create(OpCodes.Ldnull), oi.Create(OpCodes.Ceq),
+                oi.Create(OpCodes.And), oi.Create(OpCodes.Call, Hook("UpdateOptionsAvailability", module.TypeSystem.Void, module.TypeSystem.Boolean)), oi.Create(OpCodes.Ret) };
+            var previous = ret; foreach (var addition in additions) { oi.InsertAfter(previous, addition); previous = addition; }
+        }
+        optionsUpdate.Body.OptimizeMacros();
+        var request = Method(module, "Svz.SceneManager", "Request", 2);
+        request.Body.GetILProcessor().InsertBefore(request.Body.Instructions[0],
+            Instruction.Create(OpCodes.Call, Hook("SceneChanging", module.TypeSystem.Void)));
+		AtReturns(Method(module, "PauseMenu", ".ctor", 0), "ShowPauseEntry", true);
+		AtReturns(Method(module, "PauseMenu", "Destroy", 0), "ShowPauseEntry", false);
+
+		// Reset every current and pending input collection when the modal opens or closes.
+		var state = module.GetType("Svz.InputState") ?? throw new PatchException("InputState missing");
+		Require(!state.Methods.Any(m => m.Name == "ResetForSettings"), "input reset must be installed only once");
+		var reset = new MethodDefinition("ResetForSettings", MethodAttributes.Public | MethodAttributes.Static, module.TypeSystem.Void);
+		state.Methods.Add(reset); var ri = reset.Body.GetILProcessor();
+		string[] collections = { "sFingers", "Touches", "sKeys", "sKeysDown", "sKeysUp", "sKeysDownPending", "sKeysUpPending" };
+		foreach (var name in collections)
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic);
+			Require(field != null, "input collection " + name);
+			ri.Append(ri.Create(OpCodes.Ldsfld, field));
+			ri.Append(ri.Create(OpCodes.Callvirt, new MethodReference("Clear", module.TypeSystem.Void, field.FieldType) { HasThis = true }));
+		}
+		var array = new TypeReference("System", "Array", module, module.TypeSystem.CoreLibrary);
+		var clear = new MethodReference("Clear", module.TypeSystem.Void, array) { HasThis = false };
+		clear.Parameters.Add(new ParameterDefinition(array)); clear.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		clear.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		foreach (var name in new[] { "sMouse", "sMouseDown", "sMouseUp", "sMousePending", "sMouseDownPending", "sMouseUpPending" })
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic && f.FieldType.FullName == "System.Boolean[]");
+			Require(field != null, "input mouse array " + name);
+			ri.Append(ri.Create(OpCodes.Ldsfld, field)); ri.Append(ri.Create(OpCodes.Ldc_I4_0));
+			ri.Append(ri.Create(OpCodes.Ldsfld, field)); ri.Append(ri.Create(OpCodes.Ldlen)); ri.Append(ri.Create(OpCodes.Conv_I4)); ri.Append(ri.Create(OpCodes.Call, clear));
+		}
+		foreach (var name in new[] { "InputString", "sPendingString" })
+		{
+			var field = state.Fields.SingleOrDefault(f => f.Name == name && f.IsStatic && f.FieldType.FullName == "System.String");
+			Require(field != null, "input string " + name); ri.Append(ri.Create(OpCodes.Ldstr, "")); ri.Append(ri.Create(OpCodes.Stsfld, field));
+		}
+		ri.Append(ri.Create(OpCodes.Ret));
+
+		var source = module.GetType("UnityEngine.AudioSource");
+		var clip = source.Fields.Single(f => f.Name == "__clip");
+		var getName = module.ImportReference(Method(module, "UnityEngine.Object", "get_name", 0));
+		foreach (var (type, name, count) in new[] { ("UnityEngine.AudioSource", "Play", 1), ("Svz.AudioSystem", "OneShot", 3) })
+		{
+			var target = Method(module, type, name, count); target.Body.SimplifyMacros();
+			var setter = target.Body.Instructions.Where(i => Calls(i, "Godot.AudioStreamPlayer", "set_Stream")).ToList();
+			Require(setter.Count == 1, "one audio stream assignment in " + type + "." + name);
+			var old = (MethodReference)setter[0].Operand;
+			var parameters = new System.Collections.Generic.List<TypeReference> { old.DeclaringType, old.Parameters[0].ParameterType };
+			if (type == "UnityEngine.AudioSource")
+			{
+				var pi = target.Body.GetILProcessor(); pi.InsertBefore(setter[0], pi.Create(OpCodes.Ldarg_0));
+				pi.InsertBefore(setter[0], pi.Create(OpCodes.Ldfld, clip)); pi.InsertBefore(setter[0], pi.Create(OpCodes.Callvirt, getName));
+				parameters.Add(module.TypeSystem.String);
+			}
+			setter[0].OpCode = OpCodes.Call;
+			setter[0].Operand = Hook(type == "UnityEngine.AudioSource" ? "SetStream" : "SetEffectStream", module.TypeSystem.Void, parameters.ToArray());
+			target.Body.OptimizeMacros();
+		}
+        var movie = module.GetType("Svz.Movie");
+        var videoPlays = movie.Methods.Where(m => m.HasBody).SelectMany(m => m.Body.Instructions
+            .Where(i => Calls(i, "Godot.VideoStreamPlayer", "Play")).Select(i => (method: m, call: i))).ToList();
+        Require(videoPlays.Count == 1, "one video playback site");
+        var videoPlay = (MethodReference)videoPlays[0].call.Operand;
+        Require(videoPlay.HasThis && videoPlay.Parameters.Count == 0, "video Play() signature");
+        var vi = videoPlays[0].method.Body.GetILProcessor();
+        vi.InsertBefore(videoPlays[0].call, vi.Create(OpCodes.Dup));
+        vi.InsertBefore(videoPlays[0].call, vi.Create(OpCodes.Call, Hook("RouteVideo", module.TypeSystem.Void, videoPlay.DeclaringType)));
+		Require(AudioSettingsPatched(module), "settings entry points and audio routing installed");
+	}
+	private static bool AudioSettingsPatched(ModuleDefinition module) =>
+		Method(module, "OptionsImpl", "Start", 0).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "ShowOptionsEntry")) &&
+		Method(module, "Svz.Main", "_Input", 1).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "BlockGameInput")) &&
+		Method(module, "UnityEngine.AudioSource", "Play", 1).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "SetStream")) &&
+		Method(module, "Svz.AudioSystem", "OneShot", 3).Body.Instructions.Any(i => Calls(i, "Svz.GameSettings", "SetEffectStream"));
+
+	private static readonly Dictionary<string, string> RenderSetters = new()
+	{
+		["set_Visible"] = "Visible", ["set_Layers"] = "Layers",
+		["set_CastShadow"] = "Shadow", ["set_GlobalTransform"] = "Transform"
+	};
+	private static void PatchRenderQuality(ModuleDefinition module, TypeReference helper)
+	{
+		int count = 0;
+		foreach (var i in Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions)
+		{
+			if (i.Operand is not MethodReference old || !old.DeclaringType.FullName.StartsWith("Godot.") ||
+				!RenderSetters.TryGetValue(old.Name, out var name)) continue;
+			Require(old.HasThis && old.Parameters.Count == 1, "render setter signature");
+			var hook = new MethodReference(name, module.TypeSystem.Void, helper) { HasThis = false };
+			hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+			hook.Parameters.Add(new ParameterDefinition(old.Parameters[0].ParameterType));
+			i.OpCode = OpCodes.Call; i.Operand = hook; count++;
+		}
+		Require(count == 8, "expected eight render-state setters");
+		var size = Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Where(i =>
+			i.Operand is MethodReference m && m.Name == "set_Size" && m.DeclaringType.FullName == "Godot.SubViewport").ToList();
+		Require(size.Count == 1, "one camera viewport size setter");
+		var oldSize = (MethodReference)size[0].Operand;
+		var setSize = new MethodReference("Size", module.TypeSystem.Void, helper) { HasThis = false };
+		setSize.Parameters.Add(new ParameterDefinition(oldSize.DeclaringType));
+		setSize.Parameters.Add(new ParameterDefinition(oldSize.Parameters[0].ParameterType));
+		size[0].OpCode = OpCodes.Call; size[0].Operand = setSize;
+        PatchBonePose(module, helper);
+        TimeMethod(Method(module, "Svz.Render", "Sync", 0), "BeginRender", "EndRender");
+		TimeMethod(Method(module, "Svz.Main", "_Process", 1), "BeginFrame", "EndFrame");
+		Require(RenderQualityPatched(module), "render-quality hooks installed");
+
+		void TimeMethod(MethodDefinition method, string begin, string end)
+		{
+			method.Body.SimplifyMacros();
+			var il = method.Body.GetILProcessor();
+			il.InsertBefore(method.Body.Instructions[0], il.Create(OpCodes.Call,
+				new MethodReference(begin, module.TypeSystem.Void, helper) { HasThis = false }));
+			foreach (var ret in method.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+			{
+				// Keep return branch targets attached to the timing call.
+				ret.OpCode = OpCodes.Call;
+				ret.Operand = new MethodReference(end, module.TypeSystem.Void, helper) { HasThis = false };
+				il.InsertAfter(ret, il.Create(OpCodes.Ret));
+			}
+			method.Body.OptimizeMacros();
+		}
+	}
+	private static bool RenderQualityPatched(ModuleDefinition module) =>
+		Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Count(i =>
+			i.Operand is MethodReference r && r.DeclaringType.FullName == "Svz.RenderQuality" && r.DeclaringType.Scope.Name == Enh && RenderSetters.Values.Contains(r.Name)) == 8 &&
+		Method(module, "Svz.Render", "SyncCameras", 0).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "Size")) &&
+        Method(module, "Svz.Skinning", "Sync", 3).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "BonePose"));
+
+    private static void PatchWorldRendering(ModuleDefinition module, TypeReference world, TypeReference quality)
+    {
+        var build = Method(module, "Svz.Materials", "Build", 1);
+        build.Body.SimplifyMacros(); var bi = build.Body.GetILProcessor();
+        var tune = new MethodReference("TuneShader", module.TypeSystem.String, world) { HasThis = false };
+        tune.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+        var returns = build.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList();
+        Require(returns.Count == 1, "shader generator has one return");
+        returns[0].OpCode = OpCodes.Call; returns[0].Operand = tune;
+        bi.InsertAfter(returns[0], bi.Create(OpCodes.Ret)); build.Body.OptimizeMacros();
+        var get = Method(module, "Svz.Materials", "Get", 2);
+        int parameters = 0;
+        foreach (var instruction in get.Body.Instructions)
+        {
+            if (!Calls(instruction, "Godot.ShaderMaterial", "SetShaderParameter")) continue;
+            var old = (MethodReference)instruction.Operand;
+            var hook = new MethodReference("SetParameter", module.TypeSystem.Void, world) { HasThis = false };
+            hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+            foreach (var p in old.Parameters) hook.Parameters.Add(new ParameterDefinition(p.ParameterType));
+            instruction.OpCode = OpCodes.Call; instruction.Operand = hook; parameters++;
+        }
+        Require(parameters >= 10, "world material parameters matched");
+        // Each parameter name is a string literal converted to a new StringName on every refresh.
+        // Route only those literal conversions through one cached StringName per name.
+        var conversions = get.Body.Instructions.Where(i => Calls(i, "Godot.StringName", "op_Implicit") &&
+            ((MethodReference)i.Operand).Parameters.Count == 1 && ((MethodReference)i.Operand).Parameters[0].ParameterType.FullName == "System.String").ToList();
+        Require(conversions.Count == parameters && conversions.All(i => i.Previous?.OpCode == OpCodes.Ldstr),
+            "every material parameter name is one literal StringName conversion");
+        Require(conversions.All(i => i.Next != null && i.Next.OpCode.Code is not (Code.Stloc or Code.Stloc_S or Code.Stloc_0 or Code.Stloc_1 or
+            Code.Stloc_2 or Code.Stloc_3 or Code.Dup or Code.Stfld or Code.Stsfld)) &&
+            !get.Body.Instructions.Any(i => Calls(i, "Godot.StringName", "Dispose")),
+            "material parameter names are passed directly and never disposed");
+        var nameHook = new MethodReference("Name", ((MethodReference)conversions[0].Operand).ReturnType, world) { HasThis = false };
+        nameHook.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+        foreach (var conversion in conversions) conversion.Operand = nameHook;
+        var meshGet = Method(module, "Svz.MeshCache", "Get", 1);
+        var clears = meshGet.Body.Instructions.Where(i => Calls(i, "Godot.ArrayMesh", "ClearSurfaces")).ToList();
+        Require(clears.Count == 1, "one dynamic mesh surface clear");
+        var clearOld = (MethodReference)clears[0].Operand;
+        var clear = new MethodReference("ClearMeshSurfaces", module.TypeSystem.Void, quality) { HasThis = false };
+        clear.Parameters.Add(new ParameterDefinition(clearOld.DeclaringType));
+        clears[0].OpCode = OpCodes.Call; clears[0].Operand = clear;
+        var sync = Method(module, "Svz.Render", "SyncRenderer", 1);
+        sync.Body.SimplifyMacros(); var si = sync.Body.GetILProcessor(); var instructions = sync.Body.Instructions;
+        var getter = instructions.Single(i => Calls(i, "Godot.MeshInstance3D", "GetSurfaceOverrideMaterial"));
+        var setter = instructions.Single(i => Calls(i, "Godot.MeshInstance3D", "SetSurfaceOverrideMaterial"));
+        var meshLoad = instructions.Single(i => Calls(i, "Godot.Mesh", "GetSurfaceCount")).Previous;
+        Require(meshLoad.OpCode == OpCodes.Ldloc || meshLoad.OpCode == OpCodes.Ldsfld, "render mesh is a simple stable load");
+        Require(getter.Previous.OpCode == OpCodes.Ldloc && getter.Previous.Previous.OpCode == OpCodes.Ldloc &&
+            getter.Next.OpCode == OpCodes.Ldloc && getter.Next.Next.OpCode == OpCodes.Beq && getter.Next.Next.Operand == setter.Next,
+            "original material comparison block");
+        var start = getter.Previous.Previous;
+        int from = instructions.IndexOf(start), to = instructions.IndexOf(setter);
+        var block = instructions.Skip(from).Take(to - from + 1).ToHashSet();
+        Require(!instructions.Any(i => i.Operand is Instruction target && block.Contains(target)), "no branch enters material assignment block");
+        var material = (MethodReference)setter.Operand;
+        var hookMaterial = new MethodReference("ApplyMaterial", module.TypeSystem.Void, quality) { HasThis = false };
+        hookMaterial.Parameters.Add(new ParameterDefinition(material.DeclaringType));
+        hookMaterial.Parameters.Add(new ParameterDefinition(ExistingTypeRef(module, "Godot.ArrayMesh")));
+        foreach (var p in material.Parameters) hookMaterial.Parameters.Add(new ParameterDefinition(p.ParameterType));
+        Instruction copyMesh = meshLoad.Operand is VariableDefinition v ? si.Create(OpCodes.Ldloc, v) : si.Create(OpCodes.Ldsfld, (FieldReference)meshLoad.Operand);
+        var index = si.Create(OpCodes.Ldloc, (VariableDefinition)getter.Previous.Operand);
+        var value = si.Create(OpCodes.Ldloc, (VariableDefinition)getter.Next.Operand);
+        var call = si.Create(OpCodes.Call, hookMaterial);
+        si.InsertAfter(start, copyMesh); si.InsertAfter(copyMesh, index); si.InsertAfter(index, value); si.InsertAfter(value, call);
+        foreach (var old in block.Where(i => i != start)) si.Remove(old);
+        sync.Body.OptimizeMacros();
+        Require(WorldRenderingPatched(module), "world filtering and material cache hooks");
+    }
+    private static bool MaterialNamesCached(ModuleDefinition module)
+    {
+        var get = Method(module, "Svz.Materials", "Get", 2).Body.Instructions;
+        return !get.Any(i => Calls(i, "Godot.StringName", "op_Implicit")) &&
+            get.Count(i => i.Operand is MethodReference r && r.Name == "Name" && r.DeclaringType.FullName == "Svz.WorldGraphics" && r.DeclaringType.Scope.Name == Enh) >= 10;
+    }
+    private static bool WorldRenderingPatched(ModuleDefinition module) =>
+        Method(module, "Svz.Materials", "Build", 1).Body.Instructions.Any(i => Calls(i, "Svz.WorldGraphics", "TuneShader")) &&
+        Method(module, "Svz.Materials", "Get", 2).Body.Instructions.Any(i => Calls(i, "Svz.WorldGraphics", "SetParameter")) &&
+        Method(module, "Svz.Render", "SyncRenderer", 1).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "ApplyMaterial")) &&
+        Method(module, "Svz.MeshCache", "Get", 1).Body.Instructions.Any(i => Calls(i, "Svz.RenderQuality", "ClearMeshSurfaces"));
+
+	private static void PatchBonePose(ModuleDefinition module, TypeReference helper)
+	{
+		var method = Method(module, "Svz.Skinning", "Sync", 3);
+		method.Body.SimplifyMacros();
+		var instructions = method.Body.Instructions;
+		var position = instructions.Where(i => Calls(i, "Godot.Skeleton3D", "SetBonePosePosition")).ToList();
+		var rotation = instructions.Where(i => Calls(i, "Godot.Skeleton3D", "SetBonePoseRotation")).ToList();
+		Require(position.Count == 1 && rotation.Count == 1, "one bone position/rotation submission site");
+		var origin = position[0].Previous;
+		Require(Calls(origin, "Godot.Transform3D", "get_Origin") ||
+            (origin.OpCode == OpCodes.Ldfld && origin.Operand is FieldReference field &&
+                field.DeclaringType.FullName == "Godot.Transform3D" && field.Name == "Origin"),
+            "position comes from pose origin");
+		var poseLoad = origin.Previous;
+        Require(poseLoad.OpCode == OpCodes.Ldloca || poseLoad.OpCode == OpCodes.Ldarga ||
+            poseLoad.OpCode == OpCodes.Ldloc || poseLoad.OpCode == OpCodes.Ldarg,
+            "bone pose loaded immediately before origin");
+        if (poseLoad.OpCode == OpCodes.Ldloc) poseLoad.OpCode = OpCodes.Ldloca;
+        if (poseLoad.OpCode == OpCodes.Ldarg) poseLoad.OpCode = OpCodes.Ldarga;
+		int from = instructions.IndexOf(origin), to = instructions.IndexOf(rotation[0]);
+		Require(from >= 3 && to > from, "contiguous bone decomposition block");
+		var block = instructions.Skip(from).Take(to - from + 1).ToHashSet();
+		Require(block.Count(i => Calls(i, "Godot.Skeleton3D", "SetBonePoseScale")) == 1 &&
+			block.Count(i => Calls(i, "Godot.Basis", "Orthonormalized")) == 1 &&
+			block.Count(i => Calls(i, "Godot.Basis", "GetRotationQuaternion")) == 1,
+			"bone decomposition uses original scale and orthonormalized rotation");
+		Require(!instructions.Any(i => (i.Operand is Instruction target && block.Contains(target)) ||
+			(i.Operand is Instruction[] targets && targets.Any(block.Contains))), "no branch enters bone decomposition");
+		Require(method.Body.ExceptionHandlers.Count == 0, "skinning has no exception boundaries to move");
+		var old = (MethodReference)position[0].Operand;
+		var hook = new MethodReference("BonePose", module.TypeSystem.Void, helper) { HasThis = false };
+		hook.Parameters.Add(new ParameterDefinition(old.DeclaringType));
+		hook.Parameters.Add(new ParameterDefinition(module.TypeSystem.Int32));
+		hook.Parameters.Add(new ParameterDefinition(new ByReferenceType(origin.Operand is FieldReference originField ? originField.DeclaringType : ((MethodReference)origin.Operand).DeclaringType)));
+		var il = method.Body.GetILProcessor();
+		il.InsertBefore(origin, il.Create(OpCodes.Call, hook));
+		foreach (var instruction in block) il.Remove(instruction);
+		method.Body.OptimizeMacros();
+	}
 
 	// Render.SyncRenderer: Environment.GetEnvironmentVariable per particle renderer per frame;
 	// Main.DebugAutomation: OS.GetCmdlineUserArgs() twice per frame. Both values never change.
@@ -711,8 +1228,15 @@ internal static class Program
 			("event-only animation clips last until their last event", ClipLengthPatched(m)),
 			("HD fonts are scaled to the original text size", FontLoadPatched(m)),
 			("GUI text is drawn with a contrast halo pass", TextHaloPatched(m)),
+			("small labels can bypass distressed bitmap font with a native fallback", NativeSmallTextPatched(m)),
+			("audio settings menu, modal input reset and split music/effect buses", AudioSettingsPatched(m)),
+			("world sampling restored and material overrides cached with mesh revisions", WorldRenderingPatched(m)),
+			("render state skips unchanged native writes and cameras use adaptive AA", RenderQualityPatched(m)),
 			("no per-frame environment / command-line lookups", PerFrameLookupsPatched(m)),
+			("material parameter names reuse cached StringNames", MaterialNamesCached(m)),
 			("mesh rebuilds free their Godot interop temporaries", MeshInteropPatched(m)),
+			("all four particle mesh arrays reused on equal-size frames", ParticleArrayReusePatched(m)),
+			("obsolete rating popup suppressed, victory rewards retained", LegacyRatingSuppressed(m)),
 		};
 		if (!quiet) foreach (var (what, ok) in checks) Console.WriteLine($"  [{(ok ? "OK" : "--")}] {what}");
 		return checks.All(c => c.ok);

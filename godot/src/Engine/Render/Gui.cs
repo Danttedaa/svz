@@ -247,6 +247,7 @@ namespace Svz
 				var font = t.__font;
 				var tex = (font?.__texture ?? (t.__instMat ?? t.__material)?.GetTexture("_MainTex"))?.__Godot;
 				if (font == null || tex == null || string.IsNullOrEmpty(t.__text)) return;
+				tex = FontTextureCoverage.ForFont(tex);
 				var lay = TextLayout.Measure(t, true);
 				var c = t.__Color;
 				var mod = new G.Color(c.r, c.g, c.b, c.a);

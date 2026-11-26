@@ -56,6 +56,13 @@ echo "stats line present: $(grep -m1 '\[svz-fps\] stats' <<<"$out")"
 grep '\[svz-fps\] stats' <<<"$out" | python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import device_check as d; \
   s, _ = d.parse_game_log(sys.stdin.read()); assert s and s[0]['target'] == 120, s; print('device_check parses it:', s[0])" "$here/../tools/verify"
 
+echo "== audio settings touch interaction and process restart"
+audio_ui=$("$godot_bin" --headless --path "$rt" -- --phase=settings-ui 2>&1) || { echo "$audio_ui"; exit 1; }
+echo "$audio_ui"
+grep -q '\[settings-ui\] completed including native Back signal' <<<"$audio_ui" \
+  || { echo "FAIL: audio UI test quit before completing native Back checks"; exit 1; }
+"$godot_bin" --headless --path "$rt" -- --phase=settings-restart
+
 echo "== Android refresh-rate bridge against stand-in Java objects"
 "$godot_bin" --headless --path "$rt" -- --phase=bridge
 

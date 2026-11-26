@@ -50,6 +50,7 @@ namespace Svz
 			sBox.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 			sLayer.AddChild(sBox);
 			sPlayer = new VideoStreamPlayer { Stream = stream, Expand = true, Autoplay = false };
+			GameSettings.RouteVideo(sPlayer);
 			sBox.AddChild(sPlayer);
 			sPlayer.Finished += Stop;
 			sSkippable = skippable;

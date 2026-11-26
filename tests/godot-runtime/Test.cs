@@ -3,7 +3,7 @@ using Godot;
 using Svz;
 
 /// Runs FramePacing inside the real Godot 4.7 runtime (desktop, headless) and checks what it does to
-/// the engine: Engine.MaxFps, the settings file, gestures, fallback and the real frame rate.
+/// the engine: Engine.MaxFps, persistent settings, fallback and the real frame rate.
 /// Android-only paths (Surface.setFrameRate) are not exercised here.
 public partial class Test : Node
 {
@@ -38,17 +38,13 @@ public partial class Test : Node
 		return "main";
 	}
 
-	private static void Hold(int fingers)
-	{
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, fingers);
-		FramePacing.Frame(1.0 / 60, 0);
-	}
-
 	public override void _Ready()
 	{
 		switch (Phase())
 		{
 			case "main": MainChecks(); return;
+            case "settings-ui": SettingsUiChecks(); return;
+            case "settings-restart": SettingsRestart(); return;
 			case "restart-1": Restart1(); break;
 			case "restart-2": Restart2(); break;
 			case "restart-3": Restart3(); break;
@@ -58,16 +54,129 @@ public partial class Test : Node
 		Finish();
 	}
 
+    private void SettingsRestart()
+    {
+        FramePacing.Init(this, _ => { });
+        Check(GameSettings.Master >= 20 && GameSettings.Master <= 30 && GameSettings.Muted,
+            "touch-selected volume and mute survive a separate app process");
+        Check(AudioServer.IsBusMute(AudioServer.GetBusIndex(GameSettings.MasterBus)),
+            "persisted mute is applied to the real audio bus on startup");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); Finish();
+    }
+    private void SkinChecks(Node layer, Button entry, HSlider slider)
+    {
+        var button = Image.CreateEmpty(256, 128, false, Image.Format.Rgba8);
+        Check(SettingsSkin.Accept(ImageTexture.CreateFromImage(button), new Vector2I(256, 128)) &&
+            !SettingsSkin.Accept(ImageTexture.CreateFromImage(Image.CreateEmpty(255, 128, false, Image.Format.Rgba8)), new Vector2I(256, 128)) &&
+            !SettingsSkin.Accept(null, new Vector2I(256, 128)),
+            "original menu art is used only at the exact pinned texture size");
+        var theme = SettingsSkin.Theme;
+        Check(!SettingsSkin.UsesOriginalArt && theme != null && theme.HasStylebox("normal", "Button") && theme.HasStylebox("panel", "PanelContainer") &&
+            theme.HasIcon("checked", "CheckButton") && theme.HasIcon("unchecked", "CheckButton") &&
+            theme.GetIcon("grabber", "HSlider").GetHeight() >= 48,
+            "without game data the procedural menu skin is complete, with a large slider grabber");
+        var done = (Button)layer.FindChild("AudioDone", true, false);
+        var mute = (CheckButton)layer.FindChild("AudioMute", true, false);
+        var panel = (Control)layer.FindChild("AudioPanel", true, false);
+        // Virtual units: 720 tall, scaled 1.5x on a 1080-line phone.
+        Check(entry.Size.Y >= 84 && done.Size.Y >= 84 && mute.Size.Y >= 80 && slider.Size.Y >= 76 && done.Size.X >= 300,
+            $"touch targets stay large (entry {entry.Size.Y}, done {done.Size.Y}, mute {mute.Size.Y}, slider {slider.Size.Y})");
+        var screen = GetViewport().GetVisibleRect();
+        var panelRect = panel.GetGlobalTransformWithCanvas() * new Rect2(Vector2.Zero, panel.Size);
+        Check(screen.Encloses(panelRect) && panel.Size.X <= panel.CustomMinimumSize.X + 0.5f && panel.Size.Y <= panel.CustomMinimumSize.Y + 0.5f,
+            $"settings scroll fits the screen without growing (panel {panelRect}, screen {screen})");
+        bool fits = true;
+        foreach (var node in panel.FindChildren("*", "Control", true, false))
+            if (node is Control c && c.IsVisibleInTree() && (c.GetCombinedMinimumSize().X > c.Size.X + 0.5f || c.GetCombinedMinimumSize().Y > c.Size.Y + 0.5f))
+            { fits = false; GD.Print($"[settings-ui] clipped {c.Name}: min {c.GetCombinedMinimumSize()} size {c.Size}"); }
+        Check(fits, "no settings label or button is clipped");
+    }
+    private async void SettingsUiChecks()
+    {
+        DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GameSettings.ConfigPath));
+        FramePacing.Init(this, _ => { });
+        bool previousEmulation = Godot.Input.EmulateMouseFromTouch;
+        Godot.Input.EmulateMouseFromTouch = true;
+        // Phone landscape (S25 Ultra default FHD+); the headless default window is only 64x64.
+        GetWindow().Size = new Vector2I(2340, 1080);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        GameSettings.ShowOptionsEntry();
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        var layer = GetNode("AudioSettings");
+        var entry = (Button)layer.FindChild("AudioEntry", true, false);
+        GameSettings.UpdateOptionsAvailability(false);
+        Check(!entry.Visible, "audio entry hides behind legacy About and confirmation dialogs");
+        GameSettings.UpdateOptionsAvailability(true);
+        Check(entry.Visible, "audio entry returns after legacy dialogs close");
+        var entryPoint = entry.GetGlobalTransformWithCanvas() * (entry.Size / 2);
+        Check(GameSettings.BlockGameInput(new InputEventScreenTouch { Position = entryPoint, Pressed = true }),
+            "native settings entry touch is excluded from game input");
+        Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Position = entryPoint, Pressed = true });
+        Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Position = entryPoint, Pressed = false });
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.IsOpen && GetTree().Paused, "real touch on the Options entry opens audio settings");
+        // Container minimum sizes are resolved after the opening input event.
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        var slider = (HSlider)layer.FindChild("MasterVolume", true, false);
+        SkinChecks(layer, entry, slider);
+        void TouchAt(Control control, float fraction)
+        {
+            var point = control.GetGlobalTransformWithCanvas() * new Vector2(control.Size.X * fraction, control.Size.Y / 2);
+            Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Pressed = true, Position = point });
+            Godot.Input.ParseInputEvent(new InputEventScreenTouch { Index = 0, Pressed = false, Position = point });
+        }
+        TouchAt(slider, 0.25f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.Master >= 20 && GameSettings.Master <= 30,
+            "real touch events move the audio slider while gameplay is paused");
+        var mute = (CheckButton)layer.FindChild("AudioMute", true, false); TouchAt(mute, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.Muted && AudioServer.IsBusMute(AudioServer.GetBusIndex(GameSettings.MasterBus)),
+            "real touch toggles mute and changes the actual audio bus");
+        var done = (Button)layer.FindChild("AudioDone", true, false); TouchAt(done, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen && !GetTree().Paused, "touch Done closes the modal and resumes gameplay");
+        GameSettings.ShowPauseEntry(true);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        TouchAt(entry, 0.5f);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(GameSettings.IsOpen && entry.Text == "SETTINGS", "pause-menu entry also opens settings through real touch");
+        Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+        Godot.Input.ParseInputEvent(new InputEventKey { Keycode = Key.Escape, Pressed = false });
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen, "Escape closes the paused audio modal through its real shortcut");
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        bool quitBeforeBack = GetTree().QuitOnGoBack;
+        GameSettings.Open();
+        GameSettings.OnNotification((int)Node.NotificationWMGoBackRequest);
+        Check(!GetTree().QuitOnGoBack, "Back notification cannot re-enable automatic quit before Window emits its signal");
+        // Match Window's native order: propagate notification, then emit signal.
+        GetWindow().EmitSignal(Window.SignalName.GoBackRequested);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        Check(!GameSettings.IsOpen && GetTree().QuitOnGoBack == quitBeforeBack,
+            "native Back signal does not quit and restores the prior back policy after the event");
+        GD.Print("[settings-ui] completed including native Back signal");
+        Godot.Input.EmulateMouseFromTouch = previousEmulation;
+        Finish();
+    }
+
 	// Restart regression: each phase is a separate Godot process, so nothing survives in static state.
-	// 1: fresh install -> player picks 60 FPS and the FPS readout.
+	// 1: fresh install -> external configuration changes 60 FPS and the readout.
 	private void Restart1()
 	{
 		DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(FramePacing.ConfigPath));
 		FramePacing.Init(this, msg => mNotes.Add(msg));
 		Check(FramePacing.Settings.TargetFps == 120, "restart-1: fresh install defaults to 120");
-		Hold(4);
-		Hold(5);
-		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.Settings.ShowFps, "restart-1: 60 FPS + readout chosen");
+		FramePacing.SetTargetFps(60, "test API");
+		var cfg = new ConfigFile();
+		cfg.Load(FramePacing.ConfigPath);
+		cfg.SetValue("display", "show_fps", true);
+		cfg.Save(FramePacing.ConfigPath);
+		Check(FramePacing.Settings.TargetFps == 60 && Cfg("show_fps").AsBool(),
+			"restart-1: saved 60 FPS and readout through explicit settings");
 	}
 
 	// 2: after restart the choices are back; then back to 120, and a session fallback happens.
@@ -77,8 +186,8 @@ public partial class Test : Node
 		Check(FramePacing.Settings.TargetFps == 60, "restart-2: 60 FPS reloaded after restart");
 		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60, $"restart-2: engine capped at 60 after restart (MaxFps={Engine.MaxFps})");
 		Check(FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") != null, "restart-2: FPS readout reloaded and shown");
-		Hold(4);
-		Check(FramePacing.Settings.TargetFps == 120, "restart-2: switched back to 120");
+		FramePacing.SetTargetFps(120, "test API");
+		Check(FramePacing.Settings.TargetFps == 120, "restart-2: API restores 120");
 		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
 		Check(FramePacing.EffectiveFps == 60, "restart-2: session fallback active");
 	}
@@ -150,23 +259,28 @@ public partial class Test : Node
 		Check(FileAccess.FileExists(FramePacing.ConfigPath), "defaults written to settings file");
 		Check(Cfg("target_fps").AsInt32() == 120 && Cfg("auto_fallback").AsBool(), "settings file content");
 
-		// 4-finger hold for 1.5 s -> 60 FPS, saved
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 4);
-		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.TargetFps == 60 && FramePacing.EffectiveFps == 60, "4-finger hold switches to 60");
-		Check(Engine.MaxFps == 60, $"engine capped at 60 (MaxFps={Engine.MaxFps})");
-		Check(Cfg("target_fps").AsInt32() == 60, "60 saved");
-		Check(mNotes.Contains("Frame rate: 60 FPS"), "player notified of switch");
-
-		// 5-finger hold -> FPS overlay
+		// Legacy 4- and 5-finger holds are intentionally disabled. Neither
+		// must accidentally alter FPS, persistence, or on-screen diagnostics.
+		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 120, 4);
+		FramePacing.Frame(1.0 / 120, 0);
+		Check(FramePacing.Settings.TargetFps == 120 && FramePacing.EffectiveFps == 120,
+			"4-finger hold cannot change the 120 FPS target");
+		Check(Engine.MaxFps == 120, "120 FPS ceiling survives legacy gesture");
+		Check(Cfg("target_fps").AsInt32() == 120, "legacy hold does not change config");
+		FramePacing.SetTargetFps(60, "test API");
+		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60,
+			"explicit API still supports testing 60 FPS");
+		FramePacing.OnLevelLoaded();
+		Check(FramePacing.EffectiveFps == 60,
+			"new level does not override deliberately selected 60 FPS");
 		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 5);
 		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") != null, "5-finger hold shows FPS overlay");
+		Check(!FramePacing.Settings.ShowFps && GetNodeOrNull("FpsOverlay") == null,
+			"5-finger hold cannot change FPS overlay settings");
+		FramePacing.SetTargetFps(120, "test API");
+		Check(FramePacing.Settings.TargetFps == 120, "explicit API restores 120");
 
-		// back to 120, then simulate a device that only reaches 60 -> fallback to 60 for the session
-		for (int i = 0; i < 100; i++) FramePacing.Frame(1.0 / 60, 4);
-		FramePacing.Frame(1.0 / 60, 0);
-		Check(FramePacing.Settings.TargetFps == 120, "toggle back to 120");
+		// Simulate a device only reaching 60 -> automatic session-only fallback.
 		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
 		Check(FramePacing.EffectiveFps == 60 && FramePacing.Settings.TargetFps == 120, "fallback lowers effective rate only");
 		Check(Engine.MaxFps == 60, "fallback caps engine at 60");
@@ -177,8 +291,318 @@ public partial class Test : Node
 		FramePacing.GameRequested(30);
 		Check(FramePacing.EffectiveFps == 60 && Engine.MaxFps == 60, "game request ignored");
 
+		// New level restarts the chosen 120 FPS target, without reloading config or restarting the app.
+		FramePacing.OnLevelLoaded();
+		Check(!FramePacing.FallenBack && FramePacing.EffectiveFps == 120,
+			"new level retries original 120 FPS target");
+		Check(Engine.MaxFps == 120, "new level restores explicit 120 FPS cap");
+		Check(Cfg("target_fps").AsInt32() == 120,
+			"new level retry does not rewrite persisted player setting");
+		// Still-overloaded hardware can fall back again after the normal slow windows.
+		for (int i = 0; i < 60 * 25; i++) FramePacing.Frame(1.0 / 60, 0);
+		Check(FramePacing.FallenBack && FramePacing.EffectiveFps == 60,
+			"new level retry does not prevent fallback when load remains high");
+
 		Check(FramePacing.AndroidApiForRelease(17) == 37 && FramePacing.AndroidApiForRelease(11) == 30, "Android API mapping");
 
+		Check(FramePacing.ParseAndroidSdkVersion("34") == 34,
+			"Godot SDK 34 is not remapped to API 54");
+		Check(FramePacing.ParseAndroidSdkVersion("37.123456") == 37 &&
+			FramePacing.ParseAndroidSdkVersion(" 30 build ") == 30,
+			"SDK parser accepts incremental-build suffixes");
+		Check(FramePacing.ParseAndroidSdkVersion("30") == 30 &&
+			FramePacing.ParseAndroidSdkVersion("31") == 31,
+			"Surface overload boundary preserves API 30 and 31");
+		foreach (var version in new string[] { null, "", "LineageOS 21", "-1", "0", "34preview", "99999999999999" })
+			Check(FramePacing.ParseAndroidSdkVersion(version) == 0,
+				"unknown SDK version is conservative: " + (version ?? "<null>"));
+
+		// Font coverage must ignore black/colored atlas RGB, retain material tint,
+		// and preserve every alpha value (including antialiasing and invisible text).
+		var fontPixels = new byte[256 * 4];
+		for (int a = 0; a < 256; a++) {
+			fontPixels[a * 4] = (byte)a;
+			fontPixels[a * 4 + 1] = (byte)(255 - a);
+			fontPixels[a * 4 + 2] = 17;
+			fontPixels[a * 4 + 3] = (byte)a;
+		}
+		var originalPixels = (byte[])fontPixels.Clone();
+		var coverage = FontTextureCoverage.AlphaOnly(fontPixels, 256);
+		bool allCoverage = coverage.Length == 512, unchanged = true;
+		for (int a = 0; a < 256; a++)
+			allCoverage &= coverage[a * 2] == 255 && coverage[a * 2 + 1] == a;
+		for (int i = 0; i < fontPixels.Length; i++) unchanged &= fontPixels[i] == originalPixels[i];
+		Check(allCoverage, "font shader discards atlas RGB and preserves all 256 alpha levels");
+		Check(unchanged, "font shader does not mutate the original atlas");
+		var blackAtlas = FontTextureCoverage.AlphaOnly(new byte[] { 0, 0, 0, 255 }, 1);
+		Check(blackAtlas[0] == 255 && blackAtlas[1] == 255,
+			"black RGB atlas can render white foreground and colored labels");
+		Check(blackAtlas[0] * 0 == 0, "black shadow material remains black");
+		bool badCoverage = false;
+		try { FontTextureCoverage.AlphaOnly(new byte[3], 1); }
+		catch (System.ArgumentException) { badCoverage = true; }
+		Check(badCoverage, "invalid coverage dimensions fail before texture allocation");
+
+		var meshNode = new MeshInstance3D();
+		AddChild(meshNode);
+		long submittedBefore = RenderQuality.Submitted, skippedBefore = RenderQuality.Skipped;
+		for (int f = 0; f < 1000; f++)
+		{
+			RenderQuality.Visible(meshNode, true);
+			RenderQuality.Layers(meshNode, 3);
+			RenderQuality.Shadow(meshNode, GeometryInstance3D.ShadowCastingSetting.Off);
+			RenderQuality.Transform(meshNode, Transform3D.Identity);
+		}
+		Check(RenderQuality.Submitted - submittedBefore == 4 && RenderQuality.Skipped - skippedBefore == 3996,
+			"1000 unchanged render frames submit four writes, skip 3996");
+		Check(meshNode.Visible && meshNode.Layers == 3 && meshNode.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off,
+			"initial render state actually reaches Godot");
+		RenderQuality.Visible(meshNode, false); RenderQuality.Layers(meshNode, 7);
+		var moved = Transform3D.Identity; moved.Origin = new Vector3(0.000001f, 2, 3);
+		RenderQuality.Transform(meshNode, moved);
+		Check(!meshNode.Visible && meshNode.Layers == 7 && meshNode.GlobalTransform == moved,
+			"visibility, layer and subpixel transform changes reach Godot");
+		var secondNode = new MeshInstance3D(); AddChild(secondNode);
+		RenderQuality.Visible(secondNode, true); RenderQuality.Layers(secondNode, 3);
+		Check(secondNode.Visible && secondNode.Layers == 3, "render state never crosses node instances");
+		Check(RenderQuality.Antialiasing(false, 120) == Viewport.Msaa.Msaa2X &&
+			RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Disabled &&
+			RenderQuality.Antialiasing(true, 120) == Viewport.Msaa.Disabled,
+			"2x AA releases cost on fallback and respects original graphics");
+		FramePacing.SetTargetFps(120, "AA test");
+		RenderQuality.ResetBudget();
+		var skeleton = new Skeleton3D(); AddChild(skeleton); skeleton.AddBone("root"); skeleton.AddBone("child");
+        long beforeBone = RenderQuality.Submitted;
+        for (int f = 0; f < 1000; f++) RenderQuality.BoneScale(skeleton, 0, Vector3.One);
+        Check(RenderQuality.Submitted - beforeBone == 1 && skeleton.GetBonePoseScale(0) == Vector3.One,
+            "unchanged animation bone scales submit once, not every frame");
+        RenderQuality.BoneScale(skeleton, 0, new Vector3(2, 3, 4));
+        RenderQuality.BoneScale(skeleton, 1, Vector3.One);
+        Check(skeleton.GetBonePoseScale(0) == new Vector3(2, 3, 4) && skeleton.GetBonePoseScale(1) == Vector3.One,
+            "animated bone scale changes and different bones remain independent");
+        var poseSkeleton = new Skeleton3D(); AddChild(poseSkeleton); poseSkeleton.AddBone("pose");
+        var poseCases = new[] {
+            Transform3D.Identity,
+            new Transform3D(Basis.FromEuler(new Vector3(0.3f, -0.9f, 1.2f)).Scaled(new Vector3(2, 3, 4)), new Vector3(2, 4, -8)),
+            new Transform3D(Basis.FromEuler(new Vector3(1.2f, 0.4f, -0.7f)).Scaled(new Vector3(-2, 3, 4)), Vector3.One),
+            new Transform3D(new Basis(new Vector3(1, 0.1f, 0.2f), new Vector3(0, 2, 0.1f), new Vector3(0.1f, 0, 3)), Vector3.Zero)
+        };
+        foreach (var input in poseCases)
+        {
+            var pose = input;
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            skeleton.SetBonePoseScale(0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+            RenderQuality.BonePose(poseSkeleton, 0, ref pose);
+            Check(poseSkeleton.GetBonePose(0).IsEqualApprox(skeleton.GetBonePose(0)),
+                "single-call pose matches original decomposition including nonuniform scale, reflection and shear");
+        }
+        // Degenerate bones seen in a crowded battle (dismembered/flattened parts): no native
+        // is_rotation error and the same result as the original managed decomposition.
+        var degenerate = new[] {
+            new Transform3D(Basis.FromEuler(new Vector3(0.4f, 1.1f, -0.2f)).Scaled(new Vector3(1, 0, 1)), new Vector3(1, 2, 3)),
+            new Transform3D(Basis.FromEuler(new Vector3(-0.8f, 0.3f, 0.5f)).Scaled(new Vector3(1, 1, 0.0004f)), Vector3.Zero),
+            new Transform3D(new Basis(Vector3.Zero, Vector3.Zero, Vector3.Zero), new Vector3(0, 1, 0)),
+            new Transform3D(new Basis(new Vector3(-0.716477f, 0, 0.697611f), new Vector3(-0.697611f, 0, -0.716477f), new Vector3(-0.83205f, 0, 0.5547f)), Vector3.Zero),
+        };
+        var errors = new ErrorCounter(); OS.AddLogger(errors);
+        long beforeDegenerate = RenderQuality.Degenerate;
+        bool degenerateMatches = true;
+        foreach (var input in degenerate)
+        {
+            var pose = input;
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            skeleton.SetBonePoseScale(0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+            RenderQuality.BonePose(poseSkeleton, 0, ref pose);
+            degenerateMatches &= poseSkeleton.GetBonePosePosition(0) == skeleton.GetBonePosePosition(0) &&
+                poseSkeleton.GetBonePoseScale(0) == skeleton.GetBonePoseScale(0) &&
+                poseSkeleton.GetBonePoseRotation(0) == skeleton.GetBonePoseRotation(0);
+        }
+        OS.RemoveLogger(errors);
+        Check(degenerateMatches && RenderQuality.Degenerate - beforeDegenerate == degenerate.Length,
+            "collapsed and coplanar bone poses keep the original managed decomposition");
+        Check(errors.Count == 0, $"degenerate bone poses log no native errors (logged {errors.Count})");
+        bool fastPath = true;
+        foreach (var input in poseCases) fastPath &= RenderQuality.WellConditioned(input.Basis);
+        Check(fastPath, "ordinary rotation, nonuniform scale, reflection and shear keep the single native call");
+        int namesBefore = WorldGraphics.NamesCreated;
+        var tintName = WorldGraphics.Name("tint");
+        bool sameName = true;
+        for (int n = 0; n < 1000; n++) sameName &= ReferenceEquals(WorldGraphics.Name("tint"), tintName);
+        Check(sameName, "material parameter names are cached");
+        Check(tintName == new StringName("tint") && WorldGraphics.NamesCreated <= namesBefore + 1,
+            "cached material parameter name equals the original StringName and is created once");
+        var samePose = poseCases[3];
+        RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        long beforePose = RenderQuality.Submitted;
+        for (int f = 0; f < 1000; f++) RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        Check(RenderQuality.Submitted == beforePose, "unchanged bone poses skip all native submissions");
+        samePose.Origin += new Vector3(0.00001f, 0, 0);
+        RenderQuality.BonePose(poseSkeleton, 0, ref samePose);
+        Check(poseSkeleton.GetBonePosePosition(0) == samePose.Origin, "subpixel animated bone movement survives pose caching");
+        // Comparative interop benchmark; report measurements, never use a flaky
+        // wall-clock threshold as a correctness test. Both loops animate poses.
+        var samples = new Transform3D[256];
+        for (int i = 0; i < samples.Length; i++) samples[i] = new Transform3D(
+            Basis.FromEuler(new Vector3(i * 0.01f, i * 0.02f, -i * 0.01f)), new Vector3(i * 0.1f, 1, 2));
+        var oldTimes = new List<double>(); var newTimes = new List<double>();
+        void OldBone(int i)
+        {
+            var pose = samples[i & 255];
+            skeleton.SetBonePosePosition(0, pose.Origin);
+            RenderQuality.BoneScale(skeleton, 0, pose.Basis.Scale);
+            skeleton.SetBonePoseRotation(0, pose.Basis.Orthonormalized().GetRotationQuaternion());
+        }
+        void NewBone(int i) { var pose = samples[i & 255]; RenderQuality.BonePose(poseSkeleton, 0, ref pose); }
+        for (int i = 0; i < 2000; i++) { OldBone(i); NewBone(i); }
+        for (int run = 0; run < 5; run++)
+        {
+            ulong started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) OldBone(i);
+            oldTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+            started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) NewBone(i);
+            newTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+        }
+        oldTimes.Sort(); newTimes.Sort();
+        GD.Print(System.FormattableString.Invariant($"[benchmark] 20000 animated bones median: old={oldTimes[2]:0.00}ms new={newTimes[2]:0.00}ms"));
+        poseSkeleton.QueueFree();
+        skeleton.QueueFree();
+        var viewport = new SubViewport(); AddChild(viewport);
+		RenderQuality.Size(viewport, new Vector2I(320, 240));
+		var submittedSize = RenderQuality.Submitted;
+		RenderQuality.Size(viewport, new Vector2I(320, 240));
+		Check(viewport.Size == new Vector2I(320, 240) && RenderQuality.Submitted == submittedSize,
+			"unchanged viewport size and AA avoid native writes");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Size == new Vector2I(640, 360), "viewport still resizes on orientation or resolution change");
+		Check(RenderQuality.ReduceCostBeforeFallback(), "AA cost is removed before sacrificing selected FPS");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Msaa3D == Viewport.Msaa.Disabled && viewport.AnisotropicFilteringLevel == Viewport.AnisotropicFiltering.Anisotropy2X && FramePacing.EffectiveFps == 120 &&
+			!RenderQuality.ReduceCostBeforeFallback(), "AA downshift retains 120 and happens only once per level");
+		RenderQuality.ResetBudget();
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		Check(viewport.Msaa3D == Viewport.Msaa.Msaa2X && viewport.AnisotropicFilteringLevel == Viewport.AnisotropicFiltering.Anisotropy4X, "new level can restore edge smoothing and world filtering");
+		// CPU-bound overload (phone build 1047: 8.7-10.8 ms CPU at a 8.3 ms budget): dropping MSAA
+		// cannot help, so it is kept and the existing fallback proceeds; at 60 FPS AA stays on.
+		for (int f = 0; f < 200; f++) RenderQuality.RecordFrameCpu(9.5);
+		Check(RenderQuality.CpuBound(120) && !RenderQuality.CpuBound(60), "measured 9.5 ms CPU is bound at 120 FPS but not at 60");
+		Check(!RenderQuality.ReduceCostBeforeFallback(120) && RenderQuality.KeepAaAfterFallback,
+			"CPU-bound overload keeps 2x MSAA instead of a futile GPU downshift");
+		Check(RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Msaa2X && RenderQuality.Antialiasing(true, 60) == Viewport.Msaa.Disabled,
+			"after a CPU-bound fallback 2x MSAA remains at 60 FPS; --graphics=original still disables it");
+		RenderQuality.ResetBudget();
+		Check(RenderQuality.Antialiasing(false, 60) == Viewport.Msaa.Disabled, "a selected or GPU-bound 60 FPS target keeps MSAA off");
+		RenderQuality.Size(viewport, new Vector2I(640, 360));
+		for (int f = 0; f < 400; f++) RenderQuality.RecordFrameCpu(3.0);
+		Check(!RenderQuality.CpuBound(120) && RenderQuality.ReduceCostBeforeFallback(120) && !RenderQuality.KeepAaAfterFallback,
+			"overload with CPU headroom still removes MSAA first (GPU-bound case unchanged)");
+		RenderQuality.ResetBudget();
+		for (int f = 0; f < 400; f++) RenderQuality.RecordFrameCpu(0);
+		meshNode.QueueFree(); secondNode.QueueFree(); viewport.QueueFree();
+
+
+        DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GameSettings.ConfigPath));
+        GameSettings.Load();
+        Check(GameSettings.Master == 100 && GameSettings.Music == 100 && GameSettings.Effects == 100 && !GameSettings.Muted,
+            "fresh audio preferences preserve original volume");
+        Check(GameSettings.IsMusic("BGM_Level_Winter_Night_01") && !GameSettings.IsMusic("Enemy_Taiko_Ambience_LP_01"),
+            "actual BGM naming routes music separately from looping combat effects");
+        int masterBus = AudioServer.GetBusIndex(GameSettings.MasterBus), musicBus = AudioServer.GetBusIndex(GameSettings.MusicBus), effectsBus = AudioServer.GetBusIndex(GameSettings.EffectsBus);
+        float oldGlobalVolume = AudioServer.GetBusVolumeDb(0); bool oldGlobalMute = AudioServer.IsBusMute(0);
+        GameSettings.SetAudio(40, 0, 25, false);
+        Check(AudioServer.IsBusMute(musicBus) && !AudioServer.IsBusMute(effectsBus) &&
+            Mathf.IsEqualApprox(AudioServer.GetBusVolumeDb(effectsBus), Mathf.LinearToDb(0.25f)),
+            "music zero mutes exactly while sound-effect gain remains independent");
+        Check(AudioServer.GetBusSend(musicBus).ToString() == GameSettings.MasterBus &&
+            AudioServer.GetBusSend(effectsBus).ToString() == GameSettings.MasterBus &&
+            AudioServer.GetBusVolumeDb(0) == oldGlobalVolume && AudioServer.IsBusMute(0) == oldGlobalMute,
+            "own audio hierarchy preserves the legacy listener and pause state");
+        GameSettings.SetAudio(40, 70, 25, true);
+        Check(AudioServer.IsBusMute(masterBus), "master mute preserves slider volumes");
+        Check(GameSettings.Save() == Error.Ok, "audio settings save successfully");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Load();
+        Check(GameSettings.Master == 40 && GameSettings.Music == 70 && GameSettings.Effects == 25 && GameSettings.Muted,
+            "saved audio preferences reload independently of gameplay saves");
+        Check(GameSettings.ClampVolume(double.NaN) == 100 && GameSettings.ClampVolume(double.PositiveInfinity) == 100 &&
+            GameSettings.ClampVolume(-4) == 0 && GameSettings.ClampVolume(120) == 100,
+            "audio preferences reject nonfinite numbers and clamp out-of-range input");
+        var malformedAudio = new ConfigFile(); malformedAudio.SetValue("audio", "music", "invalid");
+        malformedAudio.SetValue("audio", "master", -12); malformedAudio.Save(GameSettings.ConfigPath); GameSettings.Load();
+        Check(GameSettings.Music == 100 && GameSettings.Master == 0, "malformed saved audio values recover safely");
+        var musicPlayer = new AudioStreamPlayer(); AddChild(musicPlayer);
+        var sound = new AudioStreamWav();
+        GameSettings.SetStream(musicPlayer, sound, "BGM_Level_Summer_Night_01");
+        Check(musicPlayer.Bus.ToString() == GameSettings.MusicBus, "music players use the music bus");
+        var moviePlayer = new VideoStreamPlayer(); AddChild(moviePlayer); GameSettings.RouteVideo(moviePlayer);
+        Check(moviePlayer.Bus.ToString() == GameSettings.MasterBus, "master volume and mute include cutscene audio");
+        moviePlayer.QueueFree();
+        GameSettings.SetEffectStream(musicPlayer, sound);
+        Check(musicPlayer.Bus.ToString() == GameSettings.EffectsBus, "reused one-shot players return to the effects bus");
+        bool previousBack = GetTree().QuitOnGoBack;
+        GameSettings.Open();
+        Check(GetTree().Paused && GameSettings.IsOpen && !GetTree().QuitOnGoBack &&
+            GameSettings.BlockGameInput(new InputEventScreenTouch { Pressed = true }),
+            "settings pause gameplay, block game touches and consume Android Back");
+        GameSettings.OnNotification((int)Node.NotificationWMGoBackRequest);
+        Check(!GetTree().Paused && !GameSettings.IsOpen && !GetTree().QuitOnGoBack,
+            "Back closes settings and keeps automatic quit blocked until the event finishes");
+        GetTree().Paused = true; GameSettings.Open(); GameSettings.Close();
+        Check(GetTree().Paused, "closing settings preserves a previously paused tree"); GetTree().Paused = false;
+        Check(GameSettings.BlockGameInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false }),
+            "closing emulated mouse release cannot activate a legacy button underneath Done");
+        Check(!GameSettings.BlockGameInput(new InputEventScreenTouch { Position = Vector2.Zero, Pressed = true }), "closed settings accept fresh ordinary game touches");
+        GameSettings.SetAudio(100, 100, 100, false); GameSettings.Save(); musicPlayer.QueueFree();
+
+        var worldCode = "shader_type spatial; uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_enable; void fragment() { ALBEDO = texture(main_tex, UV).rgb; }";
+        var tunedCode = WorldGraphics.TuneShader(worldCode);
+        Check(tunedCode.Contains("filter_linear_mipmap_anisotropic"), "opaque world shader receives anisotropic sampling");
+        foreach (var excluded in new[] { "ALPHA = 1.0;", "discard;", "blend_add", "blend_premul_alpha" })
+            Check(WorldGraphics.TuneShader(worldCode + excluded) == worldCode + excluded,
+                "transparent, cutout and effect shaders keep original sampling");
+        using var originalWorldImage = Image.CreateEmpty(16, 16, false, Image.Format.Rgba8);
+        originalWorldImage.Fill(new Color(0.3f, 0.6f, 0.2f, 1));
+        using var originalWorldTexture = ImageTexture.CreateFromImage(originalWorldImage);
+        var preparedWorld = WorldGraphics.Prepare(originalWorldTexture);
+        using var preparedImage = preparedWorld.GetImage(); using var untouchedImage = originalWorldTexture.GetImage();
+        Check(preparedImage.HasMipmaps() && !untouchedImage.HasMipmaps() &&
+            preparedImage.GetPixel(0, 0).IsEqualApprox(untouchedImage.GetPixel(0, 0)),
+            "world mip chain is restored without modifying original base pixels or source texture");
+        Check(ReferenceEquals(preparedWorld, WorldGraphics.Prepare(originalWorldTexture)), "world textures are prepared only once");
+        Check(WorldGraphics.MipBytes(4096, 4096) == 0 && WorldGraphics.MipBytes(16, 16) == 1364 &&
+            WorldGraphics.PreparedBytes <= WorldGraphics.MemoryBudget, "world texture size and memory budgets are bounded");
+        var renderedMesh = new ArrayMesh(); var renderedNode = new MeshInstance3D(); AddChild(renderedNode);
+        var arrays = new Godot.Collections.Array(); arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = new Vector3[] { Vector3.Zero, Vector3.Right, Vector3.Up };
+        void BuildSurface(ArrayMesh mesh) => mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        BuildSurface(renderedMesh); renderedNode.Mesh = renderedMesh;
+        var firstMat = new StandardMaterial3D(); var secondMat = new StandardMaterial3D();
+        long beforeMaterial = RenderQuality.Submitted;
+        for (int i = 0; i < 1000; i++) RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, firstMat);
+        Check(RenderQuality.Submitted - beforeMaterial == 1 && renderedNode.GetSurfaceOverrideMaterial(0) == firstMat,
+            "1000 unchanged material frames submit one override without repeated native reads");
+        RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, secondMat);
+        Check(renderedNode.GetSurfaceOverrideMaterial(0) == secondMat, "changing character material still updates immediately");
+        RenderQuality.ClearMeshSurfaces(renderedMesh); BuildSurface(renderedMesh);
+        beforeMaterial = RenderQuality.Submitted;
+        RenderQuality.ApplyMaterial(renderedNode, renderedMesh, 0, secondMat);
+        Check(RenderQuality.Submitted == beforeMaterial + 1 && renderedNode.GetSurfaceOverrideMaterial(0) == secondMat,
+            "particle-style mesh rebuild invalidates cached material even when material identity is unchanged");
+        var replacementMesh = new ArrayMesh(); BuildSurface(replacementMesh); renderedNode.Mesh = replacementMesh;
+        RenderQuality.ApplyMaterial(renderedNode, replacementMesh, 0, firstMat);
+        Check(renderedNode.GetSurfaceOverrideMaterial(0) == firstMat, "replacement meshes receive their own material state");
+        var oldMaterialTimes = new List<double>(); var newMaterialTimes = new List<double>();
+        for (int run = 0; run < 5; run++) {
+            ulong started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) if (renderedNode.GetSurfaceOverrideMaterial(0) != firstMat) renderedNode.SetSurfaceOverrideMaterial(0, firstMat);
+            oldMaterialTimes.Add((Time.GetTicksUsec() - started) / 1000.0); started = Time.GetTicksUsec();
+            for (int i = 0; i < 20000; i++) RenderQuality.ApplyMaterial(renderedNode, replacementMesh, 0, firstMat);
+            newMaterialTimes.Add((Time.GetTicksUsec() - started) / 1000.0);
+        }
+        oldMaterialTimes.Sort(); newMaterialTimes.Sort();
+        GD.Print(System.FormattableString.Invariant($"[benchmark] 20000 static material checks median: old={oldMaterialTimes[2]:0.00}ms new={newMaterialTimes[2]:0.00}ms"));
+        renderedNode.QueueFree(); arrays.Dispose();
 		// real-time check: does Engine.MaxFps actually limit this runtime? measure 30 FPS for 2 s
 		Engine.MaxFps = 30;
 		mPhase = 1;
@@ -197,4 +621,12 @@ public partial class Test : Node
 		mPhase = 2;
 		Finish();
 	}
+}
+
+/// Counts native engine errors (e.g. Basis::get_quaternion is_rotation failures) during a check.
+public partial class ErrorCounter : Logger
+{
+    public int Count;
+    public override void _LogError(string function, string file, int line, string code, string rationale, bool editorNotify, int errorType,
+        Godot.Collections.Array<ScriptBacktrace> scriptBacktraces) => System.Threading.Interlocked.Increment(ref Count);
 }

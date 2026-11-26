@@ -54,6 +54,81 @@ static class Program
 		Check((int)gameT.GetProperty("Registered").GetValue(game) == 1 && (int)gameT.GetProperty("Finished").GetValue(game) == 1,
 			"RegisterWin and onFinishGameRequest each ran exactly once");
 
+		// 3. A completed wave must still record rewards without showing the
+		// obsolete market rating popup (even though the fake build is "google").
+		var resultsType = port.GetType("DebriefingImpl");
+		var results = Activator.CreateInstance(resultsType, true);
+		resultsType.GetMethod("DisplayStats", F).Invoke(results, null);
+		Check((int)resultsType.GetProperty("RewardChecks").GetValue(results) == 2,
+			"debrief rewards/statistics still execute");
+		Check((int)resultsType.GetProperty("RatingPrompts").GetValue(results) == 0,
+			"obsolete market rating prompt stays hidden");
+
+		// 4. Shipped-style particle mesh builder reuses same-sized buffers but
+		// reallocates safely when particle counts change. Inspect actual patched
+		// method behavior, not only its three Cecil call-site signatures.
+		var rendererT = port.GetType("UnityEngine.ParticleRenderer");
+		var meshT = port.GetType("UnityEngine.Mesh");
+		var particlesT = port.GetType("Svz.Particles");
+		var build = particlesT.GetMethod("BuildMesh", F);
+		var countProp = rendererT.GetProperty("ParticleCount");
+		object NewRenderer(int count)
+		{
+			var obj = Activator.CreateInstance(rendererT, true);
+			countProp.SetValue(obj, count);
+			return obj;
+		}
+		var renderer = NewRenderer(3);
+		object Build(object r) => build.Invoke(null, new object[] { r, null });
+		var mesh = Build(renderer);
+		Array Field(string name) => (Array)meshT.GetField(name, F).GetValue(mesh);
+		var verts = Field("__v");
+		var uvs = Field("__uv");
+		var colors = Field("__c");
+		int[] Indices() => ((System.Collections.Generic.List<int[]>)meshT.GetField("__subs", F).GetValue(mesh))[0];
+		var indices = Indices();
+		Check(indices.Length == 18, "particle triangle mesh has six indices per particle");
+		Check(verts.Length == 12 && uvs.Length == 12 && colors.Length == 12,
+			"particle mesh generates all four corners for each particle");
+		Check(ReferenceEquals(mesh, Build(renderer)) &&
+			ReferenceEquals(verts, Field("__v")) &&
+			ReferenceEquals(uvs, Field("__uv")) &&
+			ReferenceEquals(colors, Field("__c")) && ReferenceEquals(indices, Indices()),
+			"same-sized frames reuse all four previous renderer-owned arrays");
+		countProp.SetValue(renderer, 5);
+		Build(renderer);
+		Check(Field("__v").Length == 20 && Indices().Length == 30 &&
+			!ReferenceEquals(verts, Field("__v")) && !ReferenceEquals(indices, Indices()),
+			"particle count growth resizes vertex and triangle-index arrays safely");
+		countProp.SetValue(renderer, 0);
+		Build(renderer);
+		Check(Field("__v").Length == 0 && Field("__uv").Length == 0 &&
+			Field("__c").Length == 0 && Indices().Length == 0,
+			"particle death clears previous mesh vertices, colors, and triangle indices");
+		var secondRenderer = NewRenderer(3);
+		var secondMesh = Build(secondRenderer);
+		Check(!ReferenceEquals(mesh, secondMesh) &&
+			!ReferenceEquals(verts, meshT.GetField("__v", F).GetValue(secondMesh)),
+			"different particle renderers never share mutable buffers");
+
+        var inputType = port.GetType("Svz.InputState");
+        foreach (var field in inputType.GetFields(F).Where(f => f.IsStatic))
+        {
+            var value = field.GetValue(null);
+            if (value is bool[] bits) System.Array.Fill(bits, true);
+            else if (value is string) field.SetValue(null, "held");
+            else if (value is System.Collections.IDictionary dictionary) dictionary.Add(1, 2);
+            else if (value is System.Collections.IList list) list.Add(1);
+            else value.GetType().GetMethod("Add").Invoke(value, new object[] { 1 });
+        }
+        inputType.GetMethod("ResetForSettings").Invoke(null, null);
+        Check(inputType.GetFields(F).Where(f => f.IsStatic).All(f => {
+            var value = f.GetValue(null);
+            if (value is bool[] bits) return bits.All(b => !b);
+            if (value is string text) return text == "";
+            return (int)value.GetType().GetProperty("Count").GetValue(value) == 0;
+        }), "settings clear held, pending and released game input without touching saves");
+
 		Console.WriteLine($"[test] {passed} patched-behaviour checks passed");
 		return 0;
 	}

@@ -462,6 +462,7 @@ namespace Svz
 
 		public static void Sync()
 		{
+			RenderQuality.BeginRender();
 			EnsureEnv();
 			if (sViews == null)
 			{
@@ -475,6 +476,7 @@ namespace Svz
 			SyncCameras();
 			SyncLights();
 			for (int i = 0; i < Renderers.Count; i++) SyncRenderer(Renderers[i]);
+			RenderQuality.EndRender();
 		}
 
 		private static void SyncCameras()
@@ -500,7 +502,7 @@ namespace Svz
 				}
 				var r = c.__rect;
 				int pw = Math.Max(1, (int)(r.width * sw)), ph = Math.Max(1, (int)(r.height * sh));
-				c.__vp.Size = new G.Vector2I(pw, ph);
+				RenderQuality.Size(c.__vp, new G.Vector2I(pw, ph));
 				c.__vp.RenderTargetUpdateMode = G.SubViewport.UpdateMode.Always;
 				c.__view.Visible = true;
 				c.__view.Position = new G.Vector2(r.x * sw, (1f - r.y - r.height) * sh);
@@ -590,7 +592,7 @@ namespace Svz
 			r.__visible = vis;
 			if (!vis)
 			{
-				if (r.__node != null) r.__node.Visible = false;
+				if (r.__node != null) RenderQuality.Visible(r.__node, false);
 				return;
 			}
 			if (r.__node == null)
@@ -599,28 +601,28 @@ namespace Svz
 				Main.Instance.World3D.AddChild(r.__node);
 			}
 			var node = r.__node;
-			node.Visible = true;
+			RenderQuality.Visible(node, true);
 			bool batched = r.__subsets != null && r.__subsets.Length > 0;
 			var gm = batched ? MeshCache.GetSubsets(mesh, r.__subsets) : MeshCache.Get(mesh);
 			if (node.Mesh != gm) node.Mesh = gm;
-			node.Layers = LayerBit(go.__layer);
-			node.CastShadow = G.GeometryInstance3D.ShadowCastingSetting.Off;
+			RenderQuality.Layers(node, LayerBit(go.__layer));
+			RenderQuality.Shadow(node, G.GeometryInstance3D.ShadowCastingSetting.Off);
 
 			if (r is SkinnedMeshRenderer smr && mesh.__bind.Length > 0 && smr.__bones.Length > 0)
 			{
 				Skinning.Sync(smr, node, mesh);
-				node.GlobalTransform = G.Transform3D.Identity;
+				RenderQuality.Transform(node, G.Transform3D.Identity);
 			}
-			else if (r is ParticleRenderer) node.GlobalTransform = G.Transform3D.Identity;   // particle mesh is in world space
-			else if (batched) node.GlobalTransform = r.__batchRoot != null ? M(r.__batchRoot.localToWorldMatrix) : G.Transform3D.Identity;
-			else node.GlobalTransform = M(r.transform.localToWorldMatrix);
+			else if (r is ParticleRenderer) RenderQuality.Transform(node, G.Transform3D.Identity);   // particle mesh is in world space
+			else if (batched) RenderQuality.Transform(node, r.__batchRoot != null ? M(r.__batchRoot.localToWorldMatrix) : G.Transform3D.Identity);
+			else RenderQuality.Transform(node, M(r.transform.localToWorldMatrix));
 
 			int surfaces = gm.GetSurfaceCount();
 			for (int i = 0; i < surfaces; i++)
 			{
 				Material m = r.__mats.Length == 0 ? null : r.__mats[Math.Min(i, r.__mats.Length - 1)];
 				var gmat = Materials.Get(m, r);
-				if (node.GetSurfaceOverrideMaterial(i) != gmat) node.SetSurfaceOverrideMaterial(i, gmat);
+				RenderQuality.ApplyMaterial(node, gm, i, gmat);
 			}
 		}
 	}
@@ -683,7 +685,7 @@ namespace Svz
 			if (m.__gmesh != null && m.__gmeshVersion == m.__version) return m.__gmesh;
 			int n = m.vertexCount;
 			var gm = m.__gmesh ?? new G.ArrayMesh();
-			gm.ClearSurfaces();
+			RenderQuality.ClearMeshSurfaces(gm);
 			var pos = new G.Vector3[n];
 			for (int i = 0; i < n; i++) pos[i] = Render.V(m.__v[i]);
 			G.Vector3[] nrm = null;
@@ -763,11 +765,7 @@ namespace Svz
 				var b = smr.__bones[i];
 				if (b == null || b.__destroyed) continue;
 				var t = Render.M(b.localToWorldMatrix);
-				sk.SetBonePosePosition(i, t.Origin);
-				var basis = t.Basis;
-				var scale = basis.Scale;
-				sk.SetBonePoseScale(i, scale);
-				sk.SetBonePoseRotation(i, basis.Orthonormalized().GetRotationQuaternion());
+				RenderQuality.BonePose(sk, i, ref t);
 			}
 		}
 	}
